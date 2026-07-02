@@ -58,6 +58,21 @@ function majMenu(actif) {
 
 const GRADES = ['SAP', 'CAP', 'CCH', 'SGT', 'SCH', 'ADJ', 'ADC', 'LTN', 'CNE', 'CDT', 'LCL', 'COL', 'ISP'];
 const DOMAINES_COMP = ['INCENDIE', 'PPBE', 'SSUAP', 'SR'];
+const STATUTS = ['SPV', 'SPP', 'PATS'];
+// Liste des CIS du Finistère — à ajuster librement ici si besoin
+const CIS_29 = ['AUDIERNE', 'BANNALEC', 'BREST', 'BRIEC', 'CAMARET-SUR-MER', 'CARHAIX', 'CHATEAULIN',
+  'CHATEAUNEUF-DU-FAOU', 'CLEDER', 'CLOHARS-CARNOET', 'CONCARNEAU', 'CROZON', 'DE L\'AVEN', 'DOUARNENEZ',
+  'FOUESNANT-PLEUVEN', 'GUERLESQUIN', 'GUIPAVAS', 'HUELGOAT', 'ILE DE BATZ', 'ILE DE SEIN', 'ILE MOLENE',
+  'OUESSANT', 'LANDERNEAU', 'LANDIVISIAU', 'LANMEUR', 'LANNILIS', 'LE CONQUET', 'LE FAOU', 'LE GUILVINEC',
+  'LESNEVEN', 'MOELAN-SUR-MER', 'MORLAIX', 'PLABENNEC', 'PLEYBEN', 'PLEYBER-CHRIST', 'PLONEOUR-LANVERN',
+  'PLOUDALMEZEAU', 'PLOUESCAT', 'PLOUGASNOU', 'PLOUGASTEL-DAOULAS', 'PLOUGUERNEAU', 'PLOUIGNEAU',
+  'PLOZEVET', 'PONT-AVEN', 'PONT-CROIX', 'PONT-L\'ABBE', 'QUERRIEN', 'QUIMPER', 'QUIMPERLE', 'ROSCOFF',
+  'ROSPORDEN', 'SAINT-POL-DE-LEON', 'SAINT-RENAN', 'SCAER', 'SIZUN'].map(c => 'CIS ' + c);
+
+function selectCIS(id, valeur) {
+  return `<select id="${id}"><option value="">— CIS —</option>
+    ${CIS_29.map(c => `<option ${c === valeur ? 'selected' : ''}>${c}</option>`).join('')}</select>`;
+}
 
 async function ecranNouvelleSession() {
   majMenu('new');
@@ -73,7 +88,7 @@ async function ecranNouvelleSession() {
     <div class="ligne">
       <div><label>Formation</label>
         <select id="ns-formation">${f.data.map(x => `<option value="${x.id}" data-code="${esc(x.code)}">${esc(x.libelle)}</option>`).join('')}</select></div>
-      <div><label>Lieu (CIS)</label><input id="ns-lieu" placeholder="ex : CIS BANNALEC"></div>
+      <div><label>Lieu</label>${selectCIS('ns-lieu')}</div>
     </div>
     <div class="ligne">
       <div><label>Date début</label><input id="ns-debut" type="date"></div>
@@ -90,7 +105,7 @@ async function ecranNouvelleSession() {
 }
 
 // ============================================================
-// LISTE D'APTITUDE — formateurs et RP (gérée par le GFor)
+// LISTE D'APTITUDE = GESTION DES UTILISATEURS (GFor)
 // ============================================================
 async function ecranGestionFormateurs() {
   majMenu('apt');
@@ -104,19 +119,23 @@ async function ecranGestionFormateurs() {
     const valide = a.fin_validite >= auj;
     return `<tr>
       <td>${esc(a.matricule || '')}</td><td>${esc(a.grade || '')}</td>
-      <td><b>${esc(a.nom)}</b> ${esc(a.prenom)}</td><td>${esc(a.cis || '')}</td>
-      <td>${a.qualification === 'rp' ? 'RP' : 'Formateur'}</td>
+      <td><b>${esc(a.nom)}</b> ${esc(a.prenom)}</td>
+      <td>${esc(a.statut || '')}</td><td>${esc(a.cis || '')}</td>
+      <td>${esc(a.email || '')}</td>
+      <td>${a.qualification === 'rp' ? 'RP' : 'Form.'}</td>
       <td>${(a.domaines || []).join(', ')}</td>
       <td class="${valide ? 'statut-valide' : 'statut-na'}">${a.fin_validite}${valide ? '' : ' ⚠'}</td>
-      ${estGfor ? `<td><button class="btn petit secondaire" onclick="supprAptitude(${a.id})">✕</button></td>` : ''}
+      ${estGfor ? `<td style="white-space:nowrap">
+        ${a.email ? `<button class="btn petit secondaire" title="Réinitialiser le mot de passe" onclick="resetMdp('${esc(a.email)}')">🔑</button>` : ''}
+        <button class="btn petit secondaire" onclick="supprAptitude(${a.id})">✕</button></td>` : ''}
     </tr>`;
   }).join('');
 
   $('staff-dashboard').innerHTML = `<div class="carte">
     <h2>Liste d'aptitude — formateurs et RP (${(apt || []).length})</h2>
-    <div class="info">Une personne dont la validité expire avant la fin d'une session ne peut pas y être inscrite. L'inscription est aussi filtrée par domaine de compétence.</div>
+    <div class="info">L'email sert de compte utilisateur : la personne crée elle-même son mot de passe via « Première connexion » sur l'écran d'accueil. 🔑 = envoyer un email de réinitialisation. Validité expirée = inscription sur session bloquée.</div>
     <div class="table-scroll"><table>
-      <tr><th>Matricule</th><th>Grade</th><th>Nom Prénom</th><th>CIS</th><th>Qualif.</th><th>Domaines</th><th>Fin validité</th>${estGfor ? '<th></th>' : ''}</tr>
+      <tr><th>Matricule</th><th>Grade</th><th>Nom Prénom</th><th>Statut</th><th>CIS</th><th>Email</th><th>Qualif.</th><th>Domaines</th><th>Fin validité</th>${estGfor ? '<th></th>' : ''}</tr>
       ${lignes}
     </table></div>
     ${estGfor ? `
@@ -124,13 +143,17 @@ async function ecranGestionFormateurs() {
       <div class="ligne">
         <div><label>Matricule</label><input id="ap-mat"></div>
         <div><label>Grade</label><select id="ap-grade">${GRADES.map(g => `<option>${g}</option>`).join('')}</select></div>
+        <div><label>Statut</label><select id="ap-statut">${STATUTS.map(s => `<option>${s}</option>`).join('')}</select></div>
       </div>
       <div class="ligne">
         <div><label>Nom</label><input id="ap-nom"></div>
         <div><label>Prénom</label><input id="ap-prenom"></div>
       </div>
       <div class="ligne">
-        <div><label>CIS de rattachement</label><input id="ap-cis"></div>
+        <div><label>CIS de rattachement</label>${selectCIS('ap-cis')}</div>
+        <div><label>Email (compte utilisateur)</label><input id="ap-email" type="email"></div>
+      </div>
+      <div class="ligne">
         <div><label>Qualification</label>
           <select id="ap-qualif"><option value="formateur">Formateur</option><option value="rp">Resp. pédagogique</option></select></div>
         <div><label>Fin de validité</label><input id="ap-fin" type="date"></div>
@@ -140,7 +163,7 @@ async function ecranGestionFormateurs() {
       <button class="btn" onclick="ajouterAptitude()">Ajouter</button>
 
       <h3>Import Excel</h3>
-      <p class="info">Colonnes attendues : Matricule, Nom, Prénom, Grade, CIS, Qualification (Formateur ou RP), Domaines (ex : SSUAP, SR), Fin de validité.</p>
+      <p class="info">Colonnes : Matricule, Nom, Prénom, Grade, Statut, CIS, Email, Qualification (Formateur ou RP), Domaines (ex : SSUAP, SR), Fin de validité.</p>
       <button class="btn secondaire" onclick="telechargerModeleAptitude()">📄 Télécharger le modèle</button>
       <label style="margin-top:10px">Fichier à importer (.xlsx)</label>
       <input type="file" accept=".xlsx,.xls,.csv" onchange="importerAptitudes(this)">`
@@ -154,7 +177,9 @@ async function ajouterAptitude() {
   const domaines = DOMAINES_COMP.filter(d => $('ap-dom-' + d).checked);
   const { error } = await sb.from('aptitudes').insert({
     matricule: $('ap-mat').value.trim() || null, grade: $('ap-grade').value,
-    nom, prenom, cis: $('ap-cis').value.trim() || null,
+    statut: $('ap-statut').value, nom, prenom,
+    cis: $('ap-cis').value || null,
+    email: $('ap-email').value.trim().toLowerCase() || null,
     qualification: $('ap-qualif').value, domaines, fin_validite: fin,
   });
   if (error) return toast(error.message, false);
@@ -166,6 +191,12 @@ async function supprAptitude(id) {
   const { error } = await sb.from('aptitudes').delete().eq('id', id);
   if (error) return toast(error.message, false);
   ecranGestionFormateurs();
+}
+
+async function resetMdp(email) {
+  if (!confirm('Envoyer un email de réinitialisation de mot de passe à ' + email + ' ?')) return;
+  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+  toast(error ? error.message : 'Email de réinitialisation envoyé à ' + email, !error);
 }
 
 // ---------- Import Excel ----------
@@ -196,11 +227,14 @@ function importerAptitudes(input) {
           else if (c.startsWith('nom')) o.nom = String(l[k]).trim();
           else if (c.startsWith('pren')) o.prenom = String(l[k]).trim();
           else if (c.startsWith('grade')) o.grade = String(l[k]).trim().toUpperCase();
+          else if (c.startsWith('statut')) o.statut = String(l[k]).trim().toUpperCase();
           else if (c.startsWith('cis')) o.cis = String(l[k]).trim();
+          else if (c.startsWith('email') || c.startsWith('mail')) o.email = String(l[k]).trim().toLowerCase();
           else if (c.startsWith('qualif')) o.qualification = (norm(l[k]).includes('rp') || norm(l[k]).includes('respon')) ? 'rp' : 'formateur';
           else if (c.startsWith('domaine')) o.domaines = DOMAINES_COMP.filter(d => norm(l[k]).includes(d.toLowerCase()));
           else if (c.includes('valid') || c.includes('fin')) o.fin_validite = versDateISO(l[k]);
         }
+        if (o.statut && !STATUTS.includes(o.statut)) o.statut = null;
         if (o.nom && o.prenom && o.fin_validite) rows.push(o);
       }
       if (!rows.length) return toast('Aucune ligne exploitable — vérifier les colonnes (voir le modèle)', false);
@@ -215,9 +249,9 @@ function importerAptitudes(input) {
 
 function telechargerModeleAptitude() {
   const ws = XLSX.utils.aoa_to_sheet([
-    ['Matricule', 'Nom', 'Prénom', 'Grade', 'CIS', 'Qualification', 'Domaines', 'Fin de validité'],
-    ['V0912345', 'GUEGAN', 'Pauline', 'ADC', 'CIS BANNALEC', 'RP', 'SSUAP', '31/12/2027'],
-    ['V0954321', 'SINIC', 'Chloé', 'CCH', 'CIS QUIMPERLE', 'Formateur', 'SSUAP, SR', '30/06/2027'],
+    ['Matricule', 'Nom', 'Prénom', 'Grade', 'Statut', 'CIS', 'Email', 'Qualification', 'Domaines', 'Fin de validité'],
+    ['V0912345', 'GUEGAN', 'Pauline', 'ADC', 'SPV', 'CIS BANNALEC', 'p.guegan@sdis29.fr', 'RP', 'SSUAP', '31/12/2027'],
+    ['V0954321', 'SINIC', 'Chloé', 'CCH', 'SPP', 'CIS QUIMPERLE', 'c.sinic@sdis29.fr', 'Formateur', 'SSUAP, SR', '30/06/2027'],
   ]);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Aptitudes');
@@ -307,7 +341,7 @@ async function creerSession() {
   const { data, error } = await sb.from('sessions').insert({
     formation_id: Number(sel.value),
     code_acces: code,
-    lieu: $('ns-lieu').value.trim(),
+    lieu: $('ns-lieu').value || null,
     date_debut: $('ns-debut').value || null,
     date_fin: $('ns-fin').value || null,
     responsable,
@@ -384,7 +418,7 @@ function ongletStagiaires() {
       </div>
       <div class="ligne">
         <div><label>Matricule</label><input id="st-mat"></div>
-        <div><label>CIS de rattachement</label><input id="st-cis"></div>
+        <div><label>CIS de rattachement</label>${selectCIS('st-cis')}</div>
       </div>
       <button class="btn" onclick="ajouterStagiaire()">Ajouter</button>
     </div>`;
@@ -395,7 +429,7 @@ async function ajouterStagiaire() {
   if (!nom || !prenom) return toast('Nom et prénom requis', false);
   const { error } = await sb.from('stagiaires').insert({
     session_id: S.session.id, nom, prenom,
-    matricule: $('st-mat').value.trim() || null, cis: $('st-cis').value.trim() || null,
+    matricule: $('st-mat').value.trim() || null, cis: $('st-cis').value || null,
   });
   if (error) return toast(error.message, false);
   await chargerDonneesSession(S.session.id); ongletStagiaires(); toast('Stagiaire ajouté');

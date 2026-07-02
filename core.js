@@ -61,11 +61,23 @@ async function loginStaff() {
 async function chargerProfil() {
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return;
-  const { data: profil, error } = await sb.from('profils').select('*').eq('id', user.id).single();
-  if (error || !profil) {
-    debugShow('DIAGNOSTIC PROFIL\nuser.id = ' + user.id +
-      '\nerreur = ' + (error ? JSON.stringify(error) : 'aucune ligne retournée'));
-    toast('Profil introuvable — détail affiché en bas de l\'écran', false);
+  let { data: profil } = await sb.from('profils').select('*').eq('id', user.id).maybeSingle();
+
+  // Pas de profil : création automatique depuis la liste d'aptitude (par l'email)
+  if (!profil) {
+    const { data: apt } = await sb.from('aptitudes').select('*').ilike('email', user.email || '').limit(1);
+    if (apt && apt.length) {
+      const a = apt[0];
+      const ins = await sb.from('profils').insert({
+        id: user.id, nom: a.prenom + ' ' + a.nom,
+        role: a.qualification === 'rp' ? 'rp' : 'formateur', cis: a.cis,
+      }).select().single();
+      if (ins.error) debugShow('Création de profil impossible : ' + JSON.stringify(ins.error));
+      profil = ins.data;
+    }
+  }
+  if (!profil) {
+    toast('Adresse email absente de la liste d\'aptitude — contacter le GFor.', false);
     await sb.auth.signOut();
     show('ecran-login');
     return;
@@ -101,6 +113,36 @@ async function logout() {
   $('menu-gauche').style.display = 'none';
   show('ecran-login');
 }
+
+// ---------- Création de compte (réservée à la liste d'aptitude) ----------
+async function creerCompte() {
+  const email = $('login-email').value.trim().toLowerCase();
+  const mdp = $('login-mdp').value;
+  if (!email || mdp.length < 6) return toast('Renseigner email + mot de passe (6 caractères minimum)', false);
+  const { data, error } = await sb.auth.signUp({ email, password: mdp });
+  if (error) return toast(error.message, false);
+  if (data.session) await chargerProfil(); // profil créé automatiquement si email dans la liste d'aptitude
+  else toast('Compte créé — clique sur le lien reçu par email pour confirmer, puis connecte-toi.');
+}
+
+async function motDePasseOublie() {
+  const email = $('login-email').value.trim().toLowerCase();
+  if (!email) return toast('Saisir d\'abord ton email dans le champ ci-dessus', false);
+  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+  toast(error ? error.message : 'Email de réinitialisation envoyé à ' + email, !error);
+}
+
+// Retour du lien de réinitialisation : demande du nouveau mot de passe
+sb.auth.onAuthStateChange(async (event) => {
+  if (event === 'PASSWORD_RECOVERY') {
+    const np = prompt('Nouveau mot de passe (6 caractères minimum) :');
+    if (np && np.length >= 6) {
+      const { error } = await sb.auth.updateUser({ password: np });
+      toast(error ? error.message : 'Mot de passe mis à jour', !error);
+      if (!error) await chargerProfil();
+    }
+  }
+});
 
 // ---------- Entrée stagiaire (code session + choix du nom) ----------
 async function entreeStagiaireCode() {
