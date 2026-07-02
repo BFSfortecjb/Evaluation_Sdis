@@ -2,8 +2,8 @@
 // ⚠️ Ce fichier ne bouge que pour une bonne raison. Le métier vit dans app.js.
 
 // ======= CONFIGURATION — À REMPLACER (Supabase > Settings > API) =======
-const SUPABASE_URL = 'https://VOTRE-PROJET.supabase.co';
-const SUPABASE_ANON_KEY = 'VOTRE_CLE_ANON_PUBLIQUE';
+const SUPABASE_URL = 'https://mpcehmbocrbhmczvrukm.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_uCzxHKlFH_SlnZmxAEvu9Q_mBv-iBY8';
 // =======================================================================
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
