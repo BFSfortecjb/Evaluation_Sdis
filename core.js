@@ -62,7 +62,14 @@ async function chargerProfil() {
   const { data: { user } } = await sb.auth.getUser();
   if (!user) return;
   const { data: profil, error } = await sb.from('profils').select('*').eq('id', user.id).single();
-  if (error || !profil) return toast('Compte sans profil : demander au GFOR de créer votre fiche dans la table profils.', false);
+  if (error || !profil) {
+    debugShow('DIAGNOSTIC PROFIL\nuser.id = ' + user.id +
+      '\nerreur = ' + (error ? JSON.stringify(error) : 'aucune ligne retournée'));
+    toast('Profil introuvable — détail affiché en bas de l\'écran', false);
+    await sb.auth.signOut();
+    show('ecran-login');
+    return;
+  }
   S.user = profil;
   $('bandeau-user').textContent = profil.nom + ' (' + libelleRole(profil.role) + ')';
   $('btn-logout').style.display = '';
