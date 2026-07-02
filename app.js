@@ -6,30 +6,41 @@ const NIV_CLASSE = { 'A+': 'Aplus', 'A': 'A', 'ECA': 'ECA', 'NA': 'NA', 'NE': 'N
 const JOURS = ['J1', 'J2', 'J3', 'J4', 'J5'];
 
 // ============================================================
-// ACCUEIL STAFF — liste des sessions + création
+// ACCUEIL STAFF — tableau de bord + changement de vision
 // ============================================================
+function changerVision(role) {
+  S.vision = role;
+  S.stagiaire = null;
+  if (role === 'stagiaire') return ecranChoixSessionVision();
+  ecranAccueilStaff();
+}
+
 async function ecranAccueilStaff() {
   show('ecran-staff-accueil');
-  const { data: sessions, error } = await sb.from('sessions')
-    .select('*, formations(code, libelle)').order('created_at', { ascending: false });
-  if (error) return toast(error.message, false);
+  const [sess, formt] = await Promise.all([
+    sb.from('sessions').select('*, formations(code, libelle)').order('created_at', { ascending: false }),
+    sb.from('formations').select('*').eq('actif', true),
+  ]);
+  if (sess.error) return toast(sess.error.message, false);
+  const sessions = sess.data;
+  const nb = st => sessions.filter(s => s.statut === st).length;
+  const peutCreer = S.vision === 'rp' || S.vision === 'gfor';
 
-  $('staff-sessions').innerHTML = sessions.length ? sessions.map(s => `
+  const listeSessions = sessions.length ? sessions.map(s => `
     <button class="btn-liste" onclick="ouvrirSession('${s.id}')">
       <b>${esc(s.formations.libelle)}</b> — ${esc(s.lieu || '')}
-      <span class="badge">${esc(s.statut)}</span><br>
-      <small>${esc(s.date_debut || '')} → ${esc(s.date_fin || '')} · code stagiaire : <b>${esc(s.code_acces)}</b></small>
+      <span class="badge">${esc(s.statut.replace('_', ' '))}</span><br>
+      <small>${esc(s.date_debut || '')} → ${esc(s.date_fin || '')} · RP : ${esc(s.responsable || '—')} · code stagiaire : <b>${esc(s.code_acces)}</b></small>
     </button>`).join('')
     : '<p class="info">Aucune session pour le moment.</p>';
 
-  // Création réservée RP et GFOR
-  if (S.user.role === 'rp' || S.user.role === 'gfor') {
-    const { data: formations } = await sb.from('formations').select('*').eq('actif', true);
-    $('staff-nouvelle-session').innerHTML = `
+  const formulaire = peutCreer ? `
+    <button class="btn" onclick="basculerNouvelleSession()">➕ Nouvelle session</button>
+    <div id="zone-nouvelle-session" style="display:none">
       <h3>Nouvelle session</h3>
       <div class="ligne">
         <div><label>Formation</label>
-          <select id="ns-formation">${formations.map(f => `<option value="${f.id}" data-code="${esc(f.code)}">${esc(f.libelle)}</option>`).join('')}</select></div>
+          <select id="ns-formation">${formt.data.map(f => `<option value="${f.id}" data-code="${esc(f.code)}">${esc(f.libelle)}</option>`).join('')}</select></div>
         <div><label>Lieu (CIS)</label><input id="ns-lieu" placeholder="ex : CIS BANNALEC"></div>
       </div>
       <div class="ligne">
@@ -37,10 +48,57 @@ async function ecranAccueilStaff() {
         <div><label>Date fin</label><input id="ns-fin" type="date"></div>
       </div>
       <label>Responsable pédagogique</label><input id="ns-resp" value="${esc(S.user.nom)}">
-      <button class="btn" onclick="creerSession()">Créer la session</button>`;
-  } else {
-    $('staff-nouvelle-session').innerHTML = '';
-  }
+      <button class="btn" onclick="creerSession()">Créer la session</button>
+    </div>` : '';
+
+  $('staff-dashboard').innerHTML = `
+    <div class="ligne">
+      <div class="carte stat"><div class="chiffre">${nb('preparation')}</div>en préparation</div>
+      <div class="carte stat"><div class="chiffre">${nb('en_cours')}</div>en cours</div>
+      <div class="carte stat"><div class="chiffre">${nb('terminee')}</div>terminées</div>
+    </div>
+    <div class="carte">
+      <h2>Sessions</h2>
+      ${listeSessions}
+      ${formulaire}
+    </div>`;
+}
+
+function basculerNouvelleSession() {
+  const z = $('zone-nouvelle-session');
+  z.style.display = z.style.display === 'none' ? '' : 'none';
+}
+
+// ---------- Vision stagiaire (pour l'encadrement) ----------
+async function ecranChoixSessionVision() {
+  show('ecran-staff-accueil');
+  const { data: sessions, error } = await sb.from('sessions').select('*, formations(libelle)').order('created_at', { ascending: false });
+  if (error) return toast(error.message, false);
+  $('staff-dashboard').innerHTML = `<div class="carte">
+    <h2>Vision stagiaire — choisir la session</h2>
+    ${sessions.length ? sessions.map(s => `<button class="btn-liste" onclick="visionStagiaireSession('${s.id}')">
+      <b>${esc(s.formations.libelle)}</b> — ${esc(s.lieu || '')} (${esc(s.code_acces)})</button>`).join('')
+      : '<p class="info">Aucune session disponible.</p>'}
+  </div>`;
+}
+
+async function visionStagiaireSession(sessionId) {
+  const { data: sess, error } = await sb.from('sessions').select('*').eq('id', sessionId).single();
+  if (error) return toast(error.message, false);
+  S.session = sess;
+  await chargerFormation(sess.formation_id);
+  const { data: stags } = await sb.from('stagiaires').select('*').eq('session_id', sessionId).order('nom');
+  if (!stags || !stags.length) return toast('Aucun stagiaire dans cette session', false);
+  window._stags = stags;
+  $('staff-dashboard').innerHTML = `<div class="carte">
+    <h2>Voir la formation comme quel stagiaire ?</h2>
+    ${stags.map(st => `<button class="btn-liste" onclick="visionStagiaireNom(${st.id})">${esc(st.prenom)} ${esc(st.nom)}</button>`).join('')}
+  </div>`;
+}
+
+function visionStagiaireNom(id) {
+  S.stagiaire = window._stags.find(s => s.id === id);
+  ecranAccueilStagiaire();
 }
 
 async function creerSession() {
@@ -99,7 +157,7 @@ async function ouvrirSession(sessionId) {
   $('session-onglets').innerHTML = onglets.map(([id, lbl]) =>
     `<button id="ong-${id}" onclick="ongletSession('${id}')">${lbl}</button>`).join('');
   show('ecran-session');
-  ongletSession(S.user.role === 'formateur' ? 'evaluations' : 'stagiaires');
+  ongletSession(S.vision === 'formateur' ? 'evaluations' : 'stagiaires');
 }
 
 function ongletSession(id) {

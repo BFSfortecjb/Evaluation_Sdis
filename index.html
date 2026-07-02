@@ -17,6 +17,10 @@
   header h1 { font-size: 17px; flex: 1; }
   header .user { font-size: 13px; opacity: .9; }
   header button { background: rgba(255,255,255,.18); color: #fff; border: 0; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  header select { background: rgba(255,255,255,.18); color: #fff; border: 0; padding: 6px 10px; border-radius: 6px; font-size: 13px; width: auto; }
+  header select option { color: #222; }
+  .stat { text-align: center; flex: 1; min-width: 100px; }
+  .stat .chiffre { font-size: 30px; font-weight: 800; color: var(--rouge); }
 
   main { max-width: 960px; margin: 0 auto; padding: 16px; }
 
@@ -94,6 +98,7 @@
 <header>
   <h1>🚒 Évaluation Stagiaires</h1>
   <span class="user" id="bandeau-user"></span>
+  <select id="sel-vision" style="display:none" onchange="changerVision(this.value)"></select>
   <button id="btn-logout" style="display:none" onclick="logout()">Déconnexion</button>
 </header>
 
@@ -125,13 +130,9 @@
     </div>
   </section>
 
-  <!-- ÉCRAN ACCUEIL STAFF (liste des sessions) -->
+  <!-- ÉCRAN ACCUEIL STAFF (tableau de bord) -->
   <section class="ecran" id="ecran-staff-accueil">
-    <div class="carte">
-      <h2>Sessions</h2>
-      <div id="staff-sessions"></div>
-      <div id="staff-nouvelle-session"></div>
-    </div>
+    <div id="staff-dashboard"></div>
   </section>
 
   <!-- ÉCRAN SESSION (onglets) -->

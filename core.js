@@ -71,20 +71,33 @@ async function chargerProfil() {
     return;
   }
   S.user = profil;
-  $('bandeau-user').textContent = profil.nom + ' (' + libelleRole(profil.role) + ')';
+  S.vision = profil.role;
+  $('bandeau-user').textContent = profil.nom;
   $('btn-logout').style.display = '';
+  // Un rôle donne accès à sa vision et à celles en dessous
+  const hierarchie = {
+    gfor: ['gfor', 'rp', 'formateur', 'stagiaire'],
+    rp: ['rp', 'formateur', 'stagiaire'],
+    formateur: ['formateur', 'stagiaire'],
+    chef_centre: ['chef_centre'],
+  };
+  const visions = hierarchie[profil.role] || [profil.role];
+  const sel = $('sel-vision');
+  sel.innerHTML = visions.map(r => '<option value="' + r + '">Vision : ' + libelleRole(r) + '</option>').join('');
+  sel.style.display = visions.length > 1 ? '' : 'none';
   ecranAccueilStaff(); // défini dans app.js
 }
 
 function libelleRole(r) {
-  return { rp: 'Resp. pédagogique', formateur: 'Formateur', gfor: 'GFOR', chef_centre: 'Chef de centre' }[r] || r;
+  return { rp: 'Resp. pédagogique', formateur: 'Formateur', gfor: 'GFOR', chef_centre: 'Chef de centre', stagiaire: 'Stagiaire' }[r] || r;
 }
 
 async function logout() {
   await sb.auth.signOut();
-  S.user = null; S.stagiaire = null; S.session = null;
+  S.user = null; S.stagiaire = null; S.session = null; S.vision = null;
   $('bandeau-user').textContent = '';
   $('btn-logout').style.display = 'none';
+  $('sel-vision').style.display = 'none';
   show('ecran-login');
 }
 
