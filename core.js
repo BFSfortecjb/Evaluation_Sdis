@@ -98,6 +98,7 @@ async function logout() {
   $('bandeau-user').textContent = '';
   $('btn-logout').style.display = 'none';
   $('sel-vision').style.display = 'none';
+  $('menu-gauche').style.display = 'none';
   show('ecran-login');
 }
 

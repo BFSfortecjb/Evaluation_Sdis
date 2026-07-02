@@ -19,8 +19,26 @@
   header button { background: rgba(255,255,255,.18); color: #fff; border: 0; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
   header select { background: rgba(255,255,255,.18); color: #fff; border: 0; padding: 6px 10px; border-radius: 6px; font-size: 13px; width: auto; }
   header select option { color: #222; }
-  .stat { text-align: center; flex: 1; min-width: 100px; }
-  .stat .chiffre { font-size: 30px; font-weight: 800; color: var(--rouge); }
+  .layout { display: flex; gap: 16px; align-items: flex-start; }
+  .contenu { flex: 1; min-width: 0; }
+  #menu-gauche { width: 190px; flex-shrink: 0; background: #fff; border-radius: 10px; padding: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.08); position: sticky; top: 62px; }
+  #menu-gauche button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 11px 12px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; color: var(--texte); }
+  #menu-gauche button:hover { background: var(--gris); }
+  #menu-gauche button.actif { background: var(--rouge); color: #fff; }
+  @media (max-width: 700px) {
+    .layout { flex-direction: column; }
+    #menu-gauche { width: 100%; position: static; display: flex !important; gap: 6px; }
+    #menu-gauche[style*="none"] { display: none !important; }
+    #menu-gauche button { width: auto; flex: 1; text-align: center; }
+  }
+  .stat-row { display: flex; align-items: center; gap: 14px; padding: 12px 18px; margin-bottom: 8px; }
+  .stat-row .chiffre { font-size: 26px; font-weight: 800; color: var(--rouge); min-width: 44px; text-align: center; }
+  .section-titre { font-size: 15px; font-weight: 800; margin: 18px 0 8px; color: #444; text-transform: uppercase; letter-spacing: .5px; }
+  .carte-session { border-left: 6px solid #999; cursor: pointer; }
+  .carte-session:hover { box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+  .jauge-bloc { flex: 1; min-width: 130px; }
+  .jauge { background: #e4e4e8; height: 8px; border-radius: 5px; margin-top: 3px; }
+  .jauge > div { height: 8px; border-radius: 5px; }
 
   main { max-width: 960px; margin: 0 auto; padding: 16px; }
 
@@ -103,6 +121,9 @@
 </header>
 
 <main>
+  <div class="layout">
+    <nav id="menu-gauche" style="display:none"></nav>
+    <div class="contenu">
 
   <!-- ÉCRAN LOGIN -->
   <section class="ecran" id="ecran-login">
@@ -151,6 +172,8 @@
     <div id="stagiaire-contenu"></div>
   </section>
 
+    </div><!-- /contenu -->
+  </div><!-- /layout -->
 </main>
 
 <!-- Ordre de chargement : debug d'abord, socle, métier, documents -->

@@ -15,62 +15,108 @@ function changerVision(role) {
   ecranAccueilStaff();
 }
 
-async function ecranAccueilStaff() {
+// Barème d'encadrement (RIOFE) : nb de formateurs requis selon le nb de stagiaires
+function formateursRequis(f, nbStag) {
+  const bar = f.bareme_formateurs || [];
+  if (!bar.length) return 0;
+  for (const t of bar) if (nbStag >= t.min && nbStag <= t.max) return t.formateurs;
+  return nbStag < bar[0].min ? bar[0].formateurs : bar[bar.length - 1].formateurs;
+}
+
+function jauge(n, requis, libelle, max) {
+  const ok = max ? n <= max && n > 0 : n >= requis;
+  const base = max || requis;
+  const pct = base ? Math.min(100, Math.round(n / base * 100)) : 0;
+  return `<div class="jauge-bloc"><small>${libelle} : <b class="${ok ? 'statut-valide' : 'statut-na'}">${n}/${base}</b></small>
+    <div class="jauge"><div style="width:${pct}%;background:${ok ? 'var(--ok)' : 'var(--warn)'}"></div></div></div>`;
+}
+
+function carteSession(s) {
+  const f = s.formations;
+  const reqF = formateursRequis(f, s._nbStag || f.nb_stagiaires_max);
+  return `<div class="carte carte-session" style="border-left-color:${esc(f.couleur)}" onclick="ouvrirSession('${s.id}')">
+    <span class="badge" style="background:${esc(f.couleur)};color:#fff">${esc(f.domaine)}</span>
+    <b>${esc(f.libelle)}</b> — ${esc(s.lieu || 'lieu à définir')}
+    <div class="info">${esc(s.date_debut || 'dates à définir')} → ${esc(s.date_fin || '')} · RP : ${esc(s.responsable || '—')} · code stagiaire : <b>${esc(s.code_acces)}</b></div>
+    <div class="ligne" style="margin-top:8px">
+      ${jauge(s._nbStag, null, 'Stagiaires', f.nb_stagiaires_max)}
+      ${jauge(s.responsable ? 1 : 0, f.nb_rp_requis || 1, 'Resp. péda.')}
+      ${jauge(s._nbForm, reqF, 'Formateurs FPS')}
+    </div>
+  </div>`;
+}
+
+function majMenu(actif) {
+  const m = $('menu-gauche');
+  if (!S.user || S.vision === 'stagiaire') { m.style.display = 'none'; return; }
+  const peutCreer = S.vision === 'rp' || S.vision === 'gfor';
+  m.innerHTML = `<button class="${actif === 'dash' ? 'actif' : ''}" onclick="ecranAccueilStaff()">🏠 Tableau de bord</button>` +
+    (peutCreer ? `<button class="${actif === 'new' ? 'actif' : ''}" onclick="ecranNouvelleSession()">➕ Nouvelle session</button>` : '');
+  m.style.display = '';
+}
+
+async function ecranNouvelleSession() {
+  majMenu('new');
   show('ecran-staff-accueil');
-  const [sess, formt] = await Promise.all([
-    sb.from('sessions').select('*, formations(code, libelle)').order('created_at', { ascending: false }),
+  const { data: formations, error } = await sb.from('formations').select('*').eq('actif', true);
+  if (error) return toast(error.message, false);
+  $('staff-dashboard').innerHTML = `<div class="carte">
+    <h2>Nouvelle session</h2>
+    <div class="ligne">
+      <div><label>Formation</label>
+        <select id="ns-formation">${formations.map(f => `<option value="${f.id}" data-code="${esc(f.code)}">${esc(f.libelle)}</option>`).join('')}</select></div>
+      <div><label>Lieu (CIS)</label><input id="ns-lieu" placeholder="ex : CIS BANNALEC"></div>
+    </div>
+    <div class="ligne">
+      <div><label>Date début</label><input id="ns-debut" type="date"></div>
+      <div><label>Date fin</label><input id="ns-fin" type="date"></div>
+    </div>
+    <label>Responsable pédagogique</label><input id="ns-resp" value="${esc(S.user.nom)}">
+    <button class="btn" onclick="creerSession()">Créer la session</button>
+  </div>`;
+}
+
+async function ecranAccueilStaff() {
+  majMenu('dash');
+  show('ecran-staff-accueil');
+  const [sess, stag, forms, formt] = await Promise.all([
+    sb.from('sessions').select('*, formations(*)').order('date_debut', { ascending: true, nullsFirst: false }),
+    sb.from('stagiaires').select('id, session_id'),
+    sb.from('session_formateurs').select('id, session_id'),
     sb.from('formations').select('*').eq('actif', true),
   ]);
   if (sess.error) return toast(sess.error.message, false);
   const sessions = sess.data;
-  const nb = st => sessions.filter(s => s.statut === st).length;
-  const peutCreer = S.vision === 'rp' || S.vision === 'gfor';
+  for (const s of sessions) {
+    s._nbStag = (stag.data || []).filter(x => x.session_id === s.id).length;
+    s._nbForm = (forms.data || []).filter(x => x.session_id === s.id).length;
+  }
 
-  const listeSessions = sessions.length ? sessions.map(s => `
-    <button class="btn-liste" onclick="ouvrirSession('${s.id}')">
-      <b>${esc(s.formations.libelle)}</b> — ${esc(s.lieu || '')}
-      <span class="badge">${esc(s.statut.replace('_', ' '))}</span><br>
-      <small>${esc(s.date_debut || '')} → ${esc(s.date_fin || '')} · RP : ${esc(s.responsable || '—')} · code stagiaire : <b>${esc(s.code_acces)}</b></small>
-    </button>`).join('')
-    : '<p class="info">Aucune session pour le moment.</p>';
+  // Classement par dates réelles : en cours / en préparation (à venir) / terminées
+  const auj = new Date().toISOString().slice(0, 10);
+  const enCours = sessions.filter(s => s.date_debut && s.date_fin && s.date_debut <= auj && auj <= s.date_fin && s.statut !== 'terminee');
+  const aVenir = sessions.filter(s => (!s.date_debut || s.date_debut > auj) && s.statut !== 'terminee');
+  const passees = sessions.filter(s => !enCours.includes(s) && !aVenir.includes(s));
 
-  const formulaire = peutCreer ? `
-    <button class="btn" onclick="basculerNouvelleSession()">➕ Nouvelle session</button>
-    <div id="zone-nouvelle-session" style="display:none">
-      <h3>Nouvelle session</h3>
-      <div class="ligne">
-        <div><label>Formation</label>
-          <select id="ns-formation">${formt.data.map(f => `<option value="${f.id}" data-code="${esc(f.code)}">${esc(f.libelle)}</option>`).join('')}</select></div>
-        <div><label>Lieu (CIS)</label><input id="ns-lieu" placeholder="ex : CIS BANNALEC"></div>
-      </div>
-      <div class="ligne">
-        <div><label>Date début</label><input id="ns-debut" type="date"></div>
-        <div><label>Date fin</label><input id="ns-fin" type="date"></div>
-      </div>
-      <label>Responsable pédagogique</label><input id="ns-resp" value="${esc(S.user.nom)}">
-      <button class="btn" onclick="creerSession()">Créer la session</button>
-    </div>` : '';
+  // À venir : trié par thématique (domaine) puis par date
+  aVenir.sort((a, b) => (a.formations.domaine + (a.date_debut || '9999')).localeCompare(b.formations.domaine + (b.date_debut || '9999')));
+  const parDomaine = {};
+  for (const s of aVenir) (parDomaine[s.formations.domaine] = parDomaine[s.formations.domaine] || []).push(s);
 
   $('staff-dashboard').innerHTML = `
-    <div class="ligne">
-      <div class="carte stat"><div class="chiffre">${nb('preparation')}</div>en préparation</div>
-      <div class="carte stat"><div class="chiffre">${nb('en_cours')}</div>en cours</div>
-      <div class="carte stat"><div class="chiffre">${nb('terminee')}</div>terminées</div>
-    </div>
-    <div class="carte">
-      <h2>Sessions</h2>
-      ${listeSessions}
-      ${formulaire}
-    </div>`;
-}
-
-function basculerNouvelleSession() {
-  const z = $('zone-nouvelle-session');
-  z.style.display = z.style.display === 'none' ? '' : 'none';
+    <div class="carte stat-row"><div class="chiffre">${enCours.length}</div><div>session(s) en cours</div></div>
+    <div class="carte stat-row"><div class="chiffre">${aVenir.length}</div><div>session(s) en préparation</div></div>
+    <div class="carte stat-row"><div class="chiffre">${passees.length}</div><div>session(s) terminée(s)</div></div>
+    ${enCours.length ? '<div class="section-titre">🔴 En cours</div>' + enCours.map(carteSession).join('') : ''}
+    ${Object.keys(parDomaine).map(d =>
+      `<div class="section-titre">📅 En préparation — ${esc(d)}</div>` + parDomaine[d].map(carteSession).join('')).join('')}
+    ${!enCours.length && !aVenir.length ? '<div class="carte"><p class="info">Aucune session en cours ou planifiée.</p></div>' : ''}
+    ${passees.length ? '<div class="section-titre">✔ Terminées</div>' + passees.map(carteSession).join('') : ''}`;
 }
 
 // ---------- Vision stagiaire (pour l'encadrement) ----------
 async function ecranChoixSessionVision() {
+  majMenu();
   show('ecran-staff-accueil');
   const { data: sessions, error } = await sb.from('sessions').select('*, formations(libelle)').order('created_at', { ascending: false });
   if (error) return toast(error.message, false);
