@@ -51,29 +51,177 @@ function majMenu(actif) {
   if (!S.user || S.vision === 'stagiaire') { m.style.display = 'none'; return; }
   const peutCreer = S.vision === 'rp' || S.vision === 'gfor';
   m.innerHTML = `<button class="${actif === 'dash' ? 'actif' : ''}" onclick="ecranAccueilStaff()">🏠 Tableau de bord</button>` +
-    (peutCreer ? `<button class="${actif === 'new' ? 'actif' : ''}" onclick="ecranNouvelleSession()">➕ Nouvelle session</button>` : '');
+    (peutCreer ? `<button class="${actif === 'new' ? 'actif' : ''}" onclick="ecranNouvelleSession()">➕ Nouvelle session</button>` : '') +
+    `<button class="${actif === 'apt' ? 'actif' : ''}" onclick="ecranGestionFormateurs()">👨‍🏫 Formateurs</button>`;
   m.style.display = '';
 }
+
+const GRADES = ['SAP', 'CAP', 'CCH', 'SGT', 'SCH', 'ADJ', 'ADC', 'LTN', 'CNE', 'CDT', 'LCL', 'COL', 'ISP'];
+const DOMAINES_COMP = ['INCENDIE', 'PPBE', 'SSUAP', 'SR'];
 
 async function ecranNouvelleSession() {
   majMenu('new');
   show('ecran-staff-accueil');
-  const { data: formations, error } = await sb.from('formations').select('*').eq('actif', true);
-  if (error) return toast(error.message, false);
+  const [f, rp] = await Promise.all([
+    sb.from('formations').select('*').eq('actif', true),
+    sb.from('aptitudes').select('*').eq('qualification', 'rp').order('nom'),
+  ]);
+  if (f.error) return toast(f.error.message, false);
+  const rps = rp.data || [];
   $('staff-dashboard').innerHTML = `<div class="carte">
     <h2>Nouvelle session</h2>
     <div class="ligne">
       <div><label>Formation</label>
-        <select id="ns-formation">${formations.map(f => `<option value="${f.id}" data-code="${esc(f.code)}">${esc(f.libelle)}</option>`).join('')}</select></div>
+        <select id="ns-formation">${f.data.map(x => `<option value="${x.id}" data-code="${esc(x.code)}">${esc(x.libelle)}</option>`).join('')}</select></div>
       <div><label>Lieu (CIS)</label><input id="ns-lieu" placeholder="ex : CIS BANNALEC"></div>
     </div>
     <div class="ligne">
       <div><label>Date début</label><input id="ns-debut" type="date"></div>
       <div><label>Date fin</label><input id="ns-fin" type="date"></div>
     </div>
-    <label>Responsable pédagogique</label><input id="ns-resp" value="${esc(S.user.nom)}">
+    <label>Responsable pédagogique (liste d'aptitude)</label>
+    <select id="ns-resp">
+      <option value="">— À définir —</option>
+      ${rps.map(r => `<option value="${r.id}" data-fin="${r.fin_validite}" data-nom="${esc(r.prenom + ' ' + r.nom)}">${esc(r.grade || '')} ${esc(r.prenom)} ${esc(r.nom)} — valide jusqu'au ${r.fin_validite}</option>`).join('')}
+    </select>
+    ${!rps.length ? `<p class="info">Aucun RP dans la liste d'aptitude — à charger via le menu « Formateurs ».</p>` : ''}
     <button class="btn" onclick="creerSession()">Créer la session</button>
   </div>`;
+}
+
+// ============================================================
+// LISTE D'APTITUDE — formateurs et RP (gérée par le GFor)
+// ============================================================
+async function ecranGestionFormateurs() {
+  majMenu('apt');
+  show('ecran-staff-accueil');
+  const { data: apt, error } = await sb.from('aptitudes').select('*').order('nom');
+  if (error) return toast(error.message, false);
+  const auj = new Date().toISOString().slice(0, 10);
+  const estGfor = S.vision === 'gfor';
+
+  const lignes = (apt || []).map(a => {
+    const valide = a.fin_validite >= auj;
+    return `<tr>
+      <td>${esc(a.matricule || '')}</td><td>${esc(a.grade || '')}</td>
+      <td><b>${esc(a.nom)}</b> ${esc(a.prenom)}</td><td>${esc(a.cis || '')}</td>
+      <td>${a.qualification === 'rp' ? 'RP' : 'Formateur'}</td>
+      <td>${(a.domaines || []).join(', ')}</td>
+      <td class="${valide ? 'statut-valide' : 'statut-na'}">${a.fin_validite}${valide ? '' : ' ⚠'}</td>
+      ${estGfor ? `<td><button class="btn petit secondaire" onclick="supprAptitude(${a.id})">✕</button></td>` : ''}
+    </tr>`;
+  }).join('');
+
+  $('staff-dashboard').innerHTML = `<div class="carte">
+    <h2>Liste d'aptitude — formateurs et RP (${(apt || []).length})</h2>
+    <div class="info">Une personne dont la validité expire avant la fin d'une session ne peut pas y être inscrite. L'inscription est aussi filtrée par domaine de compétence.</div>
+    <div class="table-scroll"><table>
+      <tr><th>Matricule</th><th>Grade</th><th>Nom Prénom</th><th>CIS</th><th>Qualif.</th><th>Domaines</th><th>Fin validité</th>${estGfor ? '<th></th>' : ''}</tr>
+      ${lignes}
+    </table></div>
+    ${estGfor ? `
+      <h3>Ajout individuel</h3>
+      <div class="ligne">
+        <div><label>Matricule</label><input id="ap-mat"></div>
+        <div><label>Grade</label><select id="ap-grade">${GRADES.map(g => `<option>${g}</option>`).join('')}</select></div>
+      </div>
+      <div class="ligne">
+        <div><label>Nom</label><input id="ap-nom"></div>
+        <div><label>Prénom</label><input id="ap-prenom"></div>
+      </div>
+      <div class="ligne">
+        <div><label>CIS de rattachement</label><input id="ap-cis"></div>
+        <div><label>Qualification</label>
+          <select id="ap-qualif"><option value="formateur">Formateur</option><option value="rp">Resp. pédagogique</option></select></div>
+        <div><label>Fin de validité</label><input id="ap-fin" type="date"></div>
+      </div>
+      <label>Domaines de compétence</label>
+      <div class="ligne">${DOMAINES_COMP.map(d => `<div style="min-width:110px"><input type="checkbox" id="ap-dom-${d}" style="width:auto"> ${d}</div>`).join('')}</div>
+      <button class="btn" onclick="ajouterAptitude()">Ajouter</button>
+
+      <h3>Import Excel</h3>
+      <p class="info">Colonnes attendues : Matricule, Nom, Prénom, Grade, CIS, Qualification (Formateur ou RP), Domaines (ex : SSUAP, SR), Fin de validité.</p>
+      <button class="btn secondaire" onclick="telechargerModeleAptitude()">📄 Télécharger le modèle</button>
+      <label style="margin-top:10px">Fichier à importer (.xlsx)</label>
+      <input type="file" accept=".xlsx,.xls,.csv" onchange="importerAptitudes(this)">`
+    : `<p class="info">Liste gérée par le Groupement Formation (vision GFor).</p>`}
+  </div>`;
+}
+
+async function ajouterAptitude() {
+  const nom = $('ap-nom').value.trim(), prenom = $('ap-prenom').value.trim(), fin = $('ap-fin').value;
+  if (!nom || !prenom || !fin) return toast('Nom, prénom et fin de validité requis', false);
+  const domaines = DOMAINES_COMP.filter(d => $('ap-dom-' + d).checked);
+  const { error } = await sb.from('aptitudes').insert({
+    matricule: $('ap-mat').value.trim() || null, grade: $('ap-grade').value,
+    nom, prenom, cis: $('ap-cis').value.trim() || null,
+    qualification: $('ap-qualif').value, domaines, fin_validite: fin,
+  });
+  if (error) return toast(error.message, false);
+  toast('Ajouté à la liste d\'aptitude'); ecranGestionFormateurs();
+}
+
+async function supprAptitude(id) {
+  if (!confirm('Retirer cette personne de la liste d\'aptitude ?')) return;
+  const { error } = await sb.from('aptitudes').delete().eq('id', id);
+  if (error) return toast(error.message, false);
+  ecranGestionFormateurs();
+}
+
+// ---------- Import Excel ----------
+function versDateISO(v) {
+  if (v instanceof Date && !isNaN(v)) return v.toISOString().slice(0, 10);
+  const s = String(v || '').trim();
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  return null;
+}
+
+function importerAptitudes(input) {
+  const fichier = input.files[0];
+  if (!fichier) return;
+  const lecteur = new FileReader();
+  lecteur.onload = async e => {
+    try {
+      const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
+      const lignes = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+      const norm = t => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      const rows = [];
+      for (const l of lignes) {
+        const o = { qualification: 'formateur', domaines: [] };
+        for (const k of Object.keys(l)) {
+          const c = norm(k);
+          if (c.startsWith('matri')) o.matricule = String(l[k]).trim();
+          else if (c.startsWith('nom')) o.nom = String(l[k]).trim();
+          else if (c.startsWith('pren')) o.prenom = String(l[k]).trim();
+          else if (c.startsWith('grade')) o.grade = String(l[k]).trim().toUpperCase();
+          else if (c.startsWith('cis')) o.cis = String(l[k]).trim();
+          else if (c.startsWith('qualif')) o.qualification = (norm(l[k]).includes('rp') || norm(l[k]).includes('respon')) ? 'rp' : 'formateur';
+          else if (c.startsWith('domaine')) o.domaines = DOMAINES_COMP.filter(d => norm(l[k]).includes(d.toLowerCase()));
+          else if (c.includes('valid') || c.includes('fin')) o.fin_validite = versDateISO(l[k]);
+        }
+        if (o.nom && o.prenom && o.fin_validite) rows.push(o);
+      }
+      if (!rows.length) return toast('Aucune ligne exploitable — vérifier les colonnes (voir le modèle)', false);
+      const { error } = await sb.from('aptitudes').insert(rows);
+      if (error) return toast(error.message, false);
+      toast(rows.length + ' personne(s) importée(s)');
+      ecranGestionFormateurs();
+    } catch (err) { toast('Fichier illisible : ' + err.message, false); }
+  };
+  lecteur.readAsArrayBuffer(fichier);
+}
+
+function telechargerModeleAptitude() {
+  const ws = XLSX.utils.aoa_to_sheet([
+    ['Matricule', 'Nom', 'Prénom', 'Grade', 'CIS', 'Qualification', 'Domaines', 'Fin de validité'],
+    ['V0912345', 'GUEGAN', 'Pauline', 'ADC', 'CIS BANNALEC', 'RP', 'SSUAP', '31/12/2027'],
+    ['V0954321', 'SINIC', 'Chloé', 'CCH', 'CIS QUIMPERLE', 'Formateur', 'SSUAP, SR', '30/06/2027'],
+  ]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Aptitudes');
+  XLSX.writeFile(wb, 'modele_liste_aptitude.xlsx');
 }
 
 async function ecranAccueilStaff() {
@@ -151,13 +299,18 @@ async function creerSession() {
   const sel = $('ns-formation');
   const fCode = sel.selectedOptions[0].dataset.code;
   const code = fCode + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();
+  const optR = $('ns-resp').selectedOptions[0];
+  const responsable = optR && optR.value ? optR.dataset.nom : null;
+  const dateFinS = $('ns-fin').value || null;
+  if (optR && optR.value && dateFinS && optR.dataset.fin < dateFinS)
+    return toast('Impossible : la qualification RP de ' + optR.dataset.nom + ' expire le ' + optR.dataset.fin + ', avant la fin de la session.', false);
   const { data, error } = await sb.from('sessions').insert({
     formation_id: Number(sel.value),
     code_acces: code,
     lieu: $('ns-lieu').value.trim(),
     date_debut: $('ns-debut').value || null,
     date_fin: $('ns-fin').value || null,
-    responsable: $('ns-resp').value.trim(),
+    responsable,
   }).select().single();
   if (error) return toast(error.message, false);
   toast('Session créée — code stagiaire : ' + code);
@@ -255,25 +408,39 @@ async function supprStagiaire(id) {
   await chargerDonneesSession(S.session.id); ongletStagiaires();
 }
 
-// ---------- Onglet Formateurs ----------
-function ongletFormateurs() {
+// ---------- Onglet Formateurs (inscription depuis la liste d'aptitude) ----------
+async function ongletFormateurs() {
+  const { data: apt } = await sb.from('aptitudes').select('*').eq('qualification', 'formateur').order('nom');
+  const domComp = S.formation ? S.formation.domaine_competence : null;
+  const dejaIds = S.data.formateurs.map(f => f.aptitude_id).filter(Boolean);
+  const dejaNoms = S.data.formateurs.map(f => f.nom);
+  const dispo = (apt || []).filter(a =>
+    !dejaIds.includes(a.id) && !dejaNoms.includes(a.prenom + ' ' + a.nom) &&
+    (!domComp || (a.domaines || []).includes(domComp)));
+
   $('session-contenu').innerHTML = `
     <div class="carte">
       <h2>Équipe pédagogique (${S.data.formateurs.length})</h2>
       ${S.data.formateurs.map(f => `<div class="bloc-comp">${esc(f.nom)}
         <button class="btn petit secondaire" style="float:right" onclick="supprFormateur(${f.id})">✕</button></div>`).join('')}
-      <h3>Ajouter un formateur</h3>
-      <input id="fo-nom" placeholder="Prénom NOM">
-      <button class="btn" onclick="ajouterFormateur()">Ajouter</button>
+      <h3>Inscrire un formateur (liste d'aptitude${domComp ? ' — domaine ' + esc(domComp) : ''})</h3>
+      ${dispo.length ? `
+        <select id="fo-apt">${dispo.map(a =>
+          `<option value="${a.id}" data-fin="${a.fin_validite}" data-nom="${esc(a.prenom + ' ' + a.nom)}">${esc(a.grade || '')} ${esc(a.prenom)} ${esc(a.nom)} (${esc(a.cis || '')}) — valide jusqu'au ${a.fin_validite}</option>`).join('')}</select>
+        <button class="btn" onclick="ajouterFormateur()">Inscrire</button>`
+      : `<p class="info">Aucun formateur disponible dans la liste d'aptitude${domComp ? ' pour le domaine ' + esc(domComp) : ''} (liste chargée par le GFor, menu « Formateurs »).</p>`}
     </div>`;
 }
 
 async function ajouterFormateur() {
-  const nom = $('fo-nom').value.trim();
-  if (!nom) return toast('Nom requis', false);
-  const { error } = await sb.from('session_formateurs').insert({ session_id: S.session.id, nom });
+  const opt = $('fo-apt').selectedOptions[0];
+  if (!opt) return;
+  if (S.session.date_fin && opt.dataset.fin < S.session.date_fin)
+    return toast('Impossible : la qualification de ' + opt.dataset.nom + ' expire le ' + opt.dataset.fin + ', avant la fin de la session (' + S.session.date_fin + ').', false);
+  const { error } = await sb.from('session_formateurs').insert({
+    session_id: S.session.id, nom: opt.dataset.nom, aptitude_id: Number(opt.value) });
   if (error) return toast(error.message, false);
-  await chargerDonneesSession(S.session.id); ongletFormateurs(); toast('Formateur ajouté');
+  await chargerDonneesSession(S.session.id); ongletFormateurs(); toast('Formateur inscrit');
 }
 
 async function supprFormateur(id) {
