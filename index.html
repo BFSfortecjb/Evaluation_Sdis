@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Évaluation Stagiaires — SDIS</title>
+<style>
+  :root {
+    --rouge: #c8102e; --rouge-fonce: #9a0c23; --gris: #f4f4f6; --texte: #222;
+    --ok: #2e7d32; --warn: #ef6c00; --ko: #b00020; --bleu: #1565c0;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background: var(--gris); color: var(--texte); }
+
+  /* Bandeau */
+  header { background: var(--rouge); color: #fff; padding: 10px 16px; display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 10; }
+  header h1 { font-size: 17px; flex: 1; }
+  header .user { font-size: 13px; opacity: .9; }
+  header button { background: rgba(255,255,255,.18); color: #fff; border: 0; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+
+  main { max-width: 960px; margin: 0 auto; padding: 16px; }
+
+  /* Écrans */
+  .ecran { display: none; }
+  .ecran.actif { display: block; }
+
+  .carte { background: #fff; border-radius: 10px; padding: 18px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .carte h2 { font-size: 17px; margin-bottom: 12px; color: var(--rouge); }
+  .carte h3 { font-size: 15px; margin: 14px 0 8px; }
+
+  /* Formulaires */
+  label { display: block; font-size: 13px; font-weight: 600; margin: 10px 0 4px; }
+  input, select, textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 8px; font-size: 15px; background: #fff; }
+  textarea { min-height: 70px; }
+  .ligne { display: flex; gap: 10px; flex-wrap: wrap; }
+  .ligne > div { flex: 1; min-width: 140px; }
+
+  /* Boutons */
+  .btn { display: inline-block; background: var(--rouge); color: #fff; border: 0; padding: 11px 18px; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 12px; }
+  .btn:hover { background: var(--rouge-fonce); }
+  .btn.secondaire { background: #e4e4e8; color: var(--texte); }
+  .btn.petit { padding: 6px 12px; font-size: 13px; margin: 0; }
+  .btn-liste { display: block; width: 100%; text-align: left; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 12px 14px; font-size: 15px; margin-bottom: 8px; cursor: pointer; }
+  .btn-liste:hover { border-color: var(--rouge); }
+  .lien-retour { color: var(--bleu); cursor: pointer; font-size: 14px; display: inline-block; margin-bottom: 10px; }
+
+  /* Onglets session */
+  .onglets { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+  .onglets button { flex: 1; min-width: 110px; padding: 9px 6px; border: 0; border-radius: 8px; background: #e4e4e8; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .onglets button.actif { background: var(--rouge); color: #fff; }
+
+  /* Tableaux */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; background: #fff; }
+  th, td { border: 1px solid #ddd; padding: 7px 8px; text-align: left; }
+  th { background: var(--rouge); color: #fff; font-weight: 600; }
+  .table-scroll { overflow-x: auto; }
+
+  /* Pastilles de niveau */
+  .niv { display: inline-block; padding: 3px 9px; border-radius: 12px; font-size: 12px; font-weight: 700; color: #fff; }
+  .niv-Aplus { background: var(--ok); } .niv-A { background: #66bb6a; }
+  .niv-ECA { background: var(--warn); } .niv-NA { background: var(--ko); }
+  .niv-NE { background: #9e9e9e; }
+  .statut-valide { color: var(--ok); font-weight: 700; }
+  .statut-eca { color: var(--warn); font-weight: 700; }
+  .statut-na { color: var(--ko); font-weight: 700; }
+
+  /* Boutons d'évaluation A+/A/ECA/NA/NE */
+  .choix-niv { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+  .choix-niv button { flex: 1; min-width: 52px; padding: 9px 4px; border: 2px solid #ccc; border-radius: 8px; background: #fff; font-weight: 700; font-size: 13px; cursor: pointer; }
+  .choix-niv button.sel-Aplus { border-color: var(--ok); background: var(--ok); color: #fff; }
+  .choix-niv button.sel-A { border-color: #66bb6a; background: #66bb6a; color: #fff; }
+  .choix-niv button.sel-ECA { border-color: var(--warn); background: var(--warn); color: #fff; }
+  .choix-niv button.sel-NA { border-color: var(--ko); background: var(--ko); color: #fff; }
+  .choix-niv button.sel-NE { border-color: #9e9e9e; background: #9e9e9e; color: #fff; }
+  .bloc-comp { border-bottom: 1px solid #eee; padding: 10px 0; }
+  .bloc-comp .libelle { font-size: 13px; }
+  .bloc-comp .code { font-weight: 700; color: var(--rouge); }
+
+  /* Curseur 1-10 auto-évaluation */
+  .bloc-crit { border-bottom: 1px solid #eee; padding: 10px 0; }
+  .bloc-crit .valeur { font-weight: 700; color: var(--rouge); min-width: 26px; display: inline-block; text-align: center; }
+  input[type=range] { padding: 0; }
+
+  /* Toast */
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); padding: 12px 22px; border-radius: 8px; color: #fff; font-weight: 600; z-index: 9999; }
+  .toast.ok { background: var(--ok); } .toast.ko { background: var(--ko); }
+
+  .badge { display: inline-block; background: #e4e4e8; border-radius: 12px; padding: 3px 10px; font-size: 12px; margin-left: 6px; }
+  .info { font-size: 13px; color: #666; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🚒 Évaluation Stagiaires</h1>
+  <span class="user" id="bandeau-user"></span>
+  <button id="btn-logout" style="display:none" onclick="logout()">Déconnexion</button>
+</header>
+
+<main>
+
+  <!-- ÉCRAN LOGIN -->
+  <section class="ecran" id="ecran-login">
+    <div class="carte">
+      <h2>Accès stagiaire</h2>
+      <label>Code de session (donné par le formateur)</label>
+      <input id="stag-code" placeholder="ex : SUAP-BAN-0426" autocapitalize="characters">
+      <button class="btn" onclick="entreeStagiaireCode()">Entrer</button>
+    </div>
+    <div class="carte">
+      <h2>Accès encadrement</h2>
+      <label>Email</label>
+      <input id="login-email" type="email" autocomplete="username">
+      <label>Mot de passe</label>
+      <input id="login-mdp" type="password" autocomplete="current-password">
+      <button class="btn" onclick="loginStaff()">Se connecter</button>
+    </div>
+  </section>
+
+  <!-- ÉCRAN CHOIX DU NOM STAGIAIRE -->
+  <section class="ecran" id="ecran-stag-nom">
+    <div class="carte">
+      <h2>Qui es-tu ?</h2>
+      <div id="stag-liste"></div>
+    </div>
+  </section>
+
+  <!-- ÉCRAN ACCUEIL STAFF (liste des sessions) -->
+  <section class="ecran" id="ecran-staff-accueil">
+    <div class="carte">
+      <h2>Sessions</h2>
+      <div id="staff-sessions"></div>
+      <div id="staff-nouvelle-session"></div>
+    </div>
+  </section>
+
+  <!-- ÉCRAN SESSION (onglets) -->
+  <section class="ecran" id="ecran-session">
+    <span class="lien-retour" onclick="ecranAccueilStaff()">← Retour aux sessions</span>
+    <div class="carte">
+      <h2 id="session-titre"></h2>
+      <div class="info" id="session-infos"></div>
+    </div>
+    <div class="onglets" id="session-onglets"></div>
+    <div id="session-contenu"></div>
+  </section>
+
+  <!-- ÉCRAN ACCUEIL STAGIAIRE -->
+  <section class="ecran" id="ecran-stagiaire">
+    <div id="stagiaire-contenu"></div>
+  </section>
+
+</main>
+
+<!-- Ordre de chargement : debug d'abord, socle, métier, documents -->
+<script src="debug.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="core.js"></script>
+<script src="app.js"></script>
+<script src="pdf.js"></script>
+</body>
+</html>
