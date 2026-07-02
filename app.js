@@ -290,7 +290,7 @@ function ongletGarde() {
     const theme = S.formation.themes.find(t => t.id === p.theme_id);
     return `<tr>
       <td>${p.numero}</td><td>${esc(p.jour)}</td><td>${esc(theme ? theme.libelle : '')}</td>
-      <td>${esc(p.sujet || '')}</td><td>${esc(p.evaluateur || '')}</td>
+      <td>${esc(p.sujet || '')}</td><td>${p.evaluateur ? esc(p.evaluateur) : '<span class="statut-eca">À affecter</span>'}</td>
       <td>${eq.map(e => esc(nomStag(e.stagiaire_id)) + (e.evalue ? '' : ' <small>(non évalué)</small>')).join('<br>')}</td>
       <td><button class="btn petit secondaire" onclick="supprPassage(${p.id})">✕</button></td></tr>`;
   }).join('');
@@ -312,7 +312,11 @@ function ongletGarde() {
           <input id="pa-sujet" list="liste-cas" placeholder="libre ou choisir">
           <datalist id="liste-cas">${S.formation.cas.map(c => `<option value="${esc(c.libelle)}">`).join('')}</datalist></div>
         <div><label>Évaluateur</label>
-          <select id="pa-eval">${S.data.formateurs.map(f => `<option>${esc(f.nom)}</option>`).join('')}</select></div>
+          <select id="pa-eval">
+            <option value="">— À affecter (un formateur se positionnera) —</option>
+            ${[...new Set([S.session.responsable, ...S.data.formateurs.map(f => f.nom)].filter(Boolean))]
+              .map(n => `<option>${esc(n)}</option>`).join('')}
+          </select></div>
       </div>
       <label>Équipiers du passage (cocher « évalué » pour ceux qui comptent pour la certification)</label>
       ${S.data.stagiaires.map(s => `
@@ -327,12 +331,21 @@ function ongletGarde() {
 async function ajouterPassage() {
   const equipiers = S.data.stagiaires.filter(s => $('pa-eq-' + s.id).checked);
   if (!equipiers.length) return toast('Sélectionner au moins un équipier', false);
-  const numero = Math.max(0, ...S.data.passages.map(p => p.numero)) + 1;
-  const { data: passage, error } = await sb.from('passages').insert({
-    session_id: S.session.id, numero,
-    jour: $('pa-jour').value, theme_id: Number($('pa-theme').value),
-    sujet: $('pa-sujet').value.trim() || null, evaluateur: $('pa-eval').value || null,
-  }).select().single();
+  // Numéro unique : max en base + contrainte unique (session_id, numero), réessai si collision
+  const { data: dernier } = await sb.from('passages').select('numero')
+    .eq('session_id', S.session.id).order('numero', { ascending: false }).limit(1);
+  let numero = ((dernier && dernier[0]) ? dernier[0].numero : 0) + 1;
+  let passage = null, error = null;
+  for (let essai = 0; essai < 3; essai++) {
+    ({ data: passage, error } = await sb.from('passages').insert({
+      session_id: S.session.id, numero,
+      jour: $('pa-jour').value, theme_id: Number($('pa-theme').value),
+      sujet: $('pa-sujet').value.trim() || null, evaluateur: $('pa-eval').value || null,
+    }).select().single());
+    if (!error) break;
+    if (error.code === '23505') { numero++; continue; } // doublon : on prend le suivant
+    break;
+  }
   if (error) return toast(error.message, false);
   const { error: e2 } = await sb.from('passage_equipiers').insert(
     equipiers.map(s => ({ passage_id: passage.id, stagiaire_id: s.id, evalue: $('pa-ev-' + s.id).checked })));
@@ -356,7 +369,9 @@ function ongletEvaluations() {
     if (!eq.length) return '';
     return `<div class="carte">
       <h3>Passage n°${p.numero} · ${esc(p.jour)} · ${esc(theme ? theme.libelle : '')} ${p.sujet ? '· ' + esc(p.sujet) : ''}</h3>
-      <div class="info">Évaluateur : ${esc(p.evaluateur || '—')}</div>
+      <div class="info">Évaluateur : ${p.evaluateur
+        ? esc(p.evaluateur) + (S.user && p.evaluateur === S.user.nom ? ' (vous)' : '')
+        : `<span class="statut-eca">à affecter</span> <button class="btn petit" onclick="prendrePassage(${p.id})">🙋 Je prends ce passage</button>`}</div>
       ${eq.map(e => {
         const fait = S.data.evaluations.find(ev => ev.passage_id === p.id && ev.stagiaire_id === e.stagiaire_id);
         return `<button class="btn-liste" onclick="formEvaluation(${p.id}, ${e.stagiaire_id})">
@@ -366,6 +381,16 @@ function ongletEvaluations() {
     </div>`;
   }).join('');
   $('session-contenu').innerHTML = blocs || '<div class="carte"><p class="info">Aucun passage programmé — voir l\'onglet Feuille de garde.</p></div>';
+}
+
+async function prendrePassage(passageId) {
+  const { data, error } = await sb.from('passages').update({ evaluateur: S.user.nom })
+    .eq('id', passageId).is('evaluateur', null).select();
+  if (error) return toast(error.message, false);
+  if (!data.length) toast('Trop tard, un autre formateur s\'est positionné', false);
+  else toast('Passage affecté à ' + S.user.nom);
+  await chargerDonneesSession(S.session.id);
+  ongletEvaluations();
 }
 
 let _evalCourante = null; // {passageId, stagiaireId, notes:{}}
