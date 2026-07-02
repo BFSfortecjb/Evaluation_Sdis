@@ -65,12 +65,13 @@ async function chargerProfil() {
 
   // Pas de profil : création automatique depuis la liste d'aptitude (par l'email)
   if (!profil) {
-    const { data: apt } = await sb.from('aptitudes').select('*').ilike('email', user.email || '').limit(1);
+    const { data: apt } = await sb.from('aptitudes').select('*, qualifications(*)').ilike('email', user.email || '').limit(1);
     if (apt && apt.length) {
       const a = apt[0];
+      const estRP = (a.qualifications || []).some(q => q.role === 'rp');
       const ins = await sb.from('profils').insert({
         id: user.id, nom: a.prenom + ' ' + a.nom,
-        role: a.qualification === 'rp' ? 'rp' : 'formateur', cis: a.cis,
+        role: estRP ? 'rp' : 'formateur', cis: a.cis,
       }).select().single();
       if (ins.error) debugShow('Création de profil impossible : ' + JSON.stringify(ins.error));
       profil = ins.data;
