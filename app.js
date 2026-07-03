@@ -516,7 +516,57 @@ function ongletStagiaires() {
         <div><label>CIS de rattachement</label>${selectCIS('st-cis')}</div>
       </div>
       <button class="btn" onclick="ajouterStagiaire()">Ajouter</button>
+
+      <h3>Import Excel</h3>
+      <p class="info">Colonnes attendues : Nom, Prénom, Matricule, CIS.</p>
+      <button class="btn secondaire" onclick="telechargerModeleStagiaires()">📄 Télécharger le modèle</button>
+      <label style="margin-top:10px">Fichier à importer (.xlsx)</label>
+      <input type="file" accept=".xlsx,.xls,.csv" onchange="importerStagiaires(this)">
     </div>`;
+}
+
+function telechargerModeleStagiaires() {
+  const ws = XLSX.utils.aoa_to_sheet([
+    ['Nom', 'Prénom', 'Matricule', 'CIS'],
+    ['BERNARD', 'Esteban', 'V0911111', 'CIS BANNALEC'],
+    ['JORAND', 'Romane', 'V0922222', 'CIS QUIMPERLE'],
+  ]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Stagiaires');
+  XLSX.writeFile(wb, 'modele_stagiaires.xlsx');
+}
+
+function importerStagiaires(input) {
+  const fichier = input.files[0];
+  if (!fichier) return;
+  const lecteur = new FileReader();
+  lecteur.onload = async e => {
+    try {
+      const wb = XLSX.read(e.target.result, { type: 'array' });
+      const lignes = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+      const norm = t => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      const rows = [];
+      for (const l of lignes) {
+        const o = { session_id: S.session.id };
+        for (const k of Object.keys(l)) {
+          const c = norm(k);
+          if (c.startsWith('nom')) o.nom = String(l[k]).trim();
+          else if (c.startsWith('pren')) o.prenom = String(l[k]).trim();
+          else if (c.startsWith('matri')) o.matricule = String(l[k]).trim();
+          else if (c.startsWith('cis')) o.cis = String(l[k]).trim();
+        }
+        // pas de doublon : on ignore les stagiaires déjà présents dans la session
+        if (o.nom && o.prenom && !S.data.stagiaires.some(s =>
+          norm(s.nom + s.prenom) === norm(o.nom + o.prenom))) rows.push(o);
+      }
+      if (!rows.length) return toast('Aucune ligne exploitable ou stagiaires déjà tous présents', false);
+      const { error } = await sb.from('stagiaires').insert(rows);
+      if (error) return toast(error.message, false);
+      toast(rows.length + ' stagiaire(s) importé(s)');
+      await chargerDonneesSession(S.session.id); ongletStagiaires();
+    } catch (err) { toast('Fichier illisible : ' + err.message, false); }
+  };
+  lecteur.readAsArrayBuffer(fichier);
 }
 
 async function ajouterStagiaire() {
