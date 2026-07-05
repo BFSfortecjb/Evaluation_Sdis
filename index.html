@@ -115,7 +115,7 @@
 
 <header>
   <h1>🚒 Évaluation Stagiaires</h1>
-  <span class="user" id="bandeau-user"></span>
+  <span class="user" id="bandeau-user" onclick="ecranMonProfil()" style="cursor:pointer" title="Mon profil"></span>
   <select id="sel-vision" style="display:none" onchange="changerVision(this.value)"></select>
   <button id="btn-logout" style="display:none" onclick="logout()">Déconnexion</button>
 </header>
@@ -185,6 +185,8 @@
 <script src="debug.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/4.0.0/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/5.0.8/jspdf.plugin.autotable.min.js"></script>
 <script src="core.js"></script>
 <script src="app.js"></script>
 <script src="pdf.js"></script>

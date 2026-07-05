@@ -74,11 +74,20 @@ function selectCIS(id, valeur) {
     ${CIS_29.map(c => `<option ${c === valeur ? 'selected' : ''}>${c}</option>`).join('')}</select>`;
 }
 
+// Une même personne peut cumuler plusieurs niveaux (formateur / RP / for de for)
+// dans un même domaine, chacun avec sa propre date de fin de validité.
+function couleurRole(role) {
+  return role === 'rp' ? '#1565c0' : role === 'for_de_for' ? '#6a1b9a' : '#607d8b';
+}
+function libelleRole(role) {
+  return role === 'rp' ? 'RP' : role === 'for_de_for' ? 'For de For' : 'Form.';
+}
+
 function badgeQualif(q, suppr) {
   const auj = new Date().toISOString().slice(0, 10);
   const ok = q.fin_validite >= auj;
-  return `<span class="badge" style="background:${q.role === 'rp' ? '#1565c0' : '#607d8b'};color:#fff;margin:2px">
-    ${q.domaine} ${q.role === 'rp' ? 'RP' : 'Form.'} <span style="opacity:.85">→ ${q.fin_validite}</span>${ok ? '' : ' ⚠'}
+  return `<span class="badge" style="background:${couleurRole(q.role)};color:#fff;margin:2px">
+    ${q.domaine} ${libelleRole(q.role)} <span style="opacity:.85">→ ${q.fin_validite}</span>${ok ? '' : ' ⚠'}
     ${suppr ? `<a onclick="event.stopPropagation();supprQualification(${q.id})" style="cursor:pointer;color:#fff;font-weight:bold"> ✕</a>` : ''}
   </span>`;
 }
@@ -146,6 +155,7 @@ async function ecranGestionFormateurs() {
       <td>${esc(a.email || '')}</td>
       <td>${(a.qualifications || []).map(q => badgeQualif(q, estGfor)).join(' ') || '<span class="info">aucune</span>'}</td>
       ${estGfor ? `<td style="white-space:nowrap">
+        <button class="btn petit secondaire" title="Modifier ses informations" onclick="ecranModifierAptitude(${a.id})">✏️</button>
         ${a.email ? `<button class="btn petit secondaire" title="Réinitialiser le mot de passe" onclick="resetMdp('${esc(a.email)}')">🔑</button>` : ''}
         <button class="btn petit secondaire" onclick="supprAptitude(${a.id})">✕</button></td>` : ''}
     </tr>`).join('');
@@ -175,7 +185,7 @@ async function ecranGestionFormateurs() {
       <label>Qualifications de la personne</label>
       <div class="ligne">
         <div><label>Domaine</label><select id="ap-q-dom">${DOMAINES_COMP.map(d => `<option>${d}</option>`).join('')}</select></div>
-        <div><label>Rôle</label><select id="ap-q-role"><option value="formateur">Formateur</option><option value="rp">RP</option></select></div>
+        <div><label>Rôle</label><select id="ap-q-role"><option value="formateur">Formateur</option><option value="rp">RP</option><option value="for_de_for">For de For</option></select></div>
         <div><label>Fin de validité</label><input id="ap-q-fin" type="date"></div>
         <div style="align-self:flex-end"><button class="btn petit" onclick="ajouterQualifEnCours()">➕ Ajouter</button></div>
       </div>
@@ -186,7 +196,7 @@ async function ecranGestionFormateurs() {
       <div class="ligne">
         <div><label>Personne</label><select id="qx-apt">${(apt || []).map(a => `<option value="${a.id}">${esc(a.nom)} ${esc(a.prenom)}</option>`).join('')}</select></div>
         <div><label>Domaine</label><select id="qx-dom">${DOMAINES_COMP.map(d => `<option>${d}</option>`).join('')}</select></div>
-        <div><label>Rôle</label><select id="qx-role"><option value="formateur">Formateur</option><option value="rp">RP</option></select></div>
+        <div><label>Rôle</label><select id="qx-role"><option value="formateur">Formateur</option><option value="rp">RP</option><option value="for_de_for">For de For</option></select></div>
         <div><label>Fin de validité</label><input id="qx-fin" type="date"></div>
         <div style="align-self:flex-end"><button class="btn petit" onclick="ajouterQualifExistant()">➕ Ajouter</button></div>
       </div>
@@ -200,23 +210,24 @@ async function ecranGestionFormateurs() {
   </div>`;
 }
 
+function _rendreQualisEnCours() {
+  $('ap-q-liste').innerHTML = _qualisEnCours.map((q, i) =>
+    `<span class="badge" style="background:${couleurRole(q.role)};color:#fff;margin:2px">
+      ${q.domaine} ${libelleRole(q.role)} → ${q.fin_validite}
+      <a onclick="_qualisEnCours.splice(${i},1);ajouterQualifEnCours._maj()" style="cursor:pointer;color:#fff"> ✕</a></span>`).join('');
+}
 function ajouterQualifEnCours() {
   const fin = $('ap-q-fin').value;
   if (!fin) return toast('Renseigner la fin de validité', false);
   const dom = $('ap-q-dom').value;
-  if (_qualisEnCours.some(q => q.domaine === dom)) return toast('Domaine déjà ajouté pour cette personne', false);
-  _qualisEnCours.push({ domaine: dom, role: $('ap-q-role').value, fin_validite: fin });
-  $('ap-q-liste').innerHTML = _qualisEnCours.map((q, i) =>
-    `<span class="badge" style="background:${q.role === 'rp' ? '#1565c0' : '#607d8b'};color:#fff;margin:2px">
-      ${q.domaine} ${q.role === 'rp' ? 'RP' : 'Form.'} → ${q.fin_validite}
-      <a onclick="_qualisEnCours.splice(${i},1);ajouterQualifEnCours._maj()" style="cursor:pointer;color:#fff"> ✕</a></span>`).join('');
+  const role = $('ap-q-role').value;
+  // Une même personne peut cumuler plusieurs niveaux (formateur / RP / for de for) dans un même domaine ;
+  // seul le doublon exact domaine+rôle est bloqué.
+  if (_qualisEnCours.some(q => q.domaine === dom && q.role === role)) return toast('Ce niveau (' + libelleRole(role) + ') est déjà ajouté pour ce domaine', false);
+  _qualisEnCours.push({ domaine: dom, role, fin_validite: fin });
+  _rendreQualisEnCours();
 }
-ajouterQualifEnCours._maj = () => {
-  $('ap-q-liste').innerHTML = _qualisEnCours.map((q, i) =>
-    `<span class="badge" style="background:${q.role === 'rp' ? '#1565c0' : '#607d8b'};color:#fff;margin:2px">
-      ${q.domaine} ${q.role === 'rp' ? 'RP' : 'Form.'} → ${q.fin_validite}
-      <a onclick="_qualisEnCours.splice(${i},1);ajouterQualifEnCours._maj()" style="cursor:pointer;color:#fff"> ✕</a></span>`).join('');
-};
+ajouterQualifEnCours._maj = _rendreQualisEnCours;
 
 async function ajouterAptitude() {
   const nom = $('ap-nom').value.trim(), prenom = $('ap-prenom').value.trim();
@@ -242,7 +253,7 @@ async function ajouterQualifExistant() {
   const { error } = await sb.from('qualifications').upsert({
     aptitude_id: Number($('qx-apt').value), domaine: $('qx-dom').value,
     role: $('qx-role').value, fin_validite: fin,
-  }, { onConflict: 'aptitude_id,domaine' });
+  }, { onConflict: 'aptitude_id,domaine,role' });
   if (error) return toast(error.message, false);
   toast('Qualification ajoutée'); ecranGestionFormateurs();
 }
@@ -264,6 +275,105 @@ async function resetMdp(email) {
   if (!confirm('Envoyer un email de réinitialisation de mot de passe à ' + email + ' ?')) return;
   const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
   toast(error ? error.message : 'Email de réinitialisation envoyé à ' + email, !error);
+}
+
+// ---------- Modifier une personne de la liste d'aptitude (corriger une erreur de saisie) ----------
+function ecranModifierAptitude(id) {
+  const a = (window._apt || []).find(x => x.id === id);
+  if (!a) return;
+  $('staff-dashboard').innerHTML = `<div class="carte">
+    <span class="lien-retour" onclick="ecranGestionFormateurs()">← Retour à la liste d'aptitude</span>
+    <h2>Modifier — ${esc(a.prenom)} ${esc(a.nom)}</h2>
+    <div class="ligne">
+      <div><label>Matricule</label><input id="ma-mat" value="${esc(a.matricule || '')}"></div>
+      <div><label>Grade</label><select id="ma-grade">${GRADES.map(g => `<option ${g === a.grade ? 'selected' : ''}>${g}</option>`).join('')}</select></div>
+    </div>
+    <div class="ligne">
+      <div><label>Nom</label><input id="ma-nom" value="${esc(a.nom)}"></div>
+      <div><label>Prénom</label><input id="ma-prenom" value="${esc(a.prenom)}"></div>
+    </div>
+    <div class="ligne">
+      <div><label>Statut</label><select id="ma-statut"><option value="">—</option>${STATUTS.map(s => `<option ${s === a.statut ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
+      <div><label>CIS de rattachement</label>${selectCIS('ma-cis', a.cis || '')}</div>
+    </div>
+    <label>Email (compte utilisateur)</label><input id="ma-email" type="email" value="${esc(a.email || '')}">
+    <button class="btn" onclick="enregistrerModifAptitude(${a.id})">Enregistrer les corrections</button>
+  </div>`;
+}
+
+async function enregistrerModifAptitude(id) {
+  const nom = $('ma-nom').value.trim(), prenom = $('ma-prenom').value.trim();
+  if (!nom || !prenom) return toast('Nom et prénom requis', false);
+  const { error } = await sb.from('aptitudes').update({
+    matricule: $('ma-mat').value.trim() || null, grade: $('ma-grade').value,
+    nom, prenom, statut: $('ma-statut').value || null, cis: $('ma-cis').value || null,
+    email: $('ma-email').value.trim().toLowerCase() || null,
+  }).eq('id', id);
+  if (error) return toast(error.message, false);
+  toast('Informations corrigées'); ecranGestionFormateurs();
+}
+
+// ---------- Mon profil (accessible en cliquant sur son identité dans le bandeau) ----------
+async function ecranMonProfil() {
+  if (!S.user) return;
+  const { data: { user } } = await sb.auth.getUser();
+  const { data: apt } = await sb.from('aptitudes').select('*').ilike('email', user?.email || '').maybeSingle();
+
+  $('staff-dashboard').innerHTML = `<div class="carte">
+    <span class="lien-retour" onclick="ecranAccueilStaff()">← Retour</span>
+    <h2>Mon profil</h2>
+    <div class="info">Connecté avec : ${esc(user?.email || '')}</div>
+    <label>Nom affiché dans l'appli</label>
+    <input id="mp-nom" value="${esc(S.user.nom)}">
+    <button class="btn secondaire" onclick="enregistrerMonNom()">Enregistrer le nom</button>
+
+    <h3>Changer mon mot de passe</h3>
+    <label>Nouveau mot de passe (6 caractères minimum)</label>
+    <input id="mp-mdp" type="password">
+    <button class="btn secondaire" onclick="changerMonMdp()">Mettre à jour le mot de passe</button>
+
+    ${apt ? `
+      <h3>Corriger mes informations (liste d'aptitude)</h3>
+      <div class="info">Si une information te concernant est erronée, corrige-la ici directement.</div>
+      <div class="ligne">
+        <div><label>Matricule</label><input id="mp-mat" value="${esc(apt.matricule || '')}"></div>
+        <div><label>Grade</label><select id="mp-grade">${GRADES.map(g => `<option ${g === apt.grade ? 'selected' : ''}>${g}</option>`).join('')}</select></div>
+      </div>
+      <div class="ligne">
+        <div><label>Statut</label><select id="mp-statut"><option value="">—</option>${STATUTS.map(s => `<option ${s === apt.statut ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
+        <div><label>CIS de rattachement</label>${selectCIS('mp-cis', apt.cis || '')}</div>
+      </div>
+      <button class="btn secondaire" onclick="enregistrerMesInfosAptitude(${apt.id})">Corriger mes informations</button>
+    ` : `<p class="info">Aucune fiche dans la liste d'aptitude associée à cet email — contacte le GFor.</p>`}
+  </div>`;
+  show('ecran-staff-accueil');
+}
+
+async function enregistrerMonNom() {
+  const nom = $('mp-nom').value.trim();
+  if (!nom) return toast('Nom requis', false);
+  const { error } = await sb.from('profils').update({ nom }).eq('id', S.user.id);
+  if (error) return toast(error.message, false);
+  S.user.nom = nom;
+  $('bandeau-user').textContent = nom;
+  toast('Nom mis à jour');
+}
+
+async function changerMonMdp() {
+  const mdp = $('mp-mdp').value;
+  if (mdp.length < 6) return toast('6 caractères minimum', false);
+  const { error } = await sb.auth.updateUser({ password: mdp });
+  toast(error ? error.message : 'Mot de passe mis à jour', !error);
+  if (!error) $('mp-mdp').value = '';
+}
+
+async function enregistrerMesInfosAptitude(id) {
+  const { error } = await sb.from('aptitudes').update({
+    matricule: $('mp-mat').value.trim() || null, grade: $('mp-grade').value,
+    statut: $('mp-statut').value || null, cis: $('mp-cis').value || null,
+  }).eq('id', id);
+  if (error) return toast(error.message, false);
+  toast('Informations corrigées');
 }
 
 // ---------- Import Excel (une ligne par qualification) ----------
@@ -298,7 +408,9 @@ function importerAptitudes(input) {
           else if (c.startsWith('cis')) o.cis = String(l[k]).trim();
           else if (c.startsWith('email') || c.startsWith('mail')) o.email = String(l[k]).trim().toLowerCase();
           else if (c.startsWith('domaine')) o.domaine = DOMAINES_COMP.find(d => norm(l[k]).includes(d.toLowerCase())) || null;
-          else if (c.startsWith('role') || c.startsWith('qualif')) o.role = (norm(l[k]).includes('rp') || norm(l[k]).includes('respon')) ? 'rp' : 'formateur';
+          else if (c.startsWith('role') || c.startsWith('qualif')) o.role =
+            (norm(l[k]).includes('for de for') || norm(l[k]).includes('fdf')) ? 'for_de_for'
+            : (norm(l[k]).includes('rp') || norm(l[k]).includes('respon')) ? 'rp' : 'formateur';
           else if (c.includes('valid') || c.includes('fin')) o.fin_validite = versDateISO(l[k]);
         }
         if (o.nom && o.prenom) brutes.push(o);
@@ -328,7 +440,7 @@ function importerAptitudes(input) {
         const qualis = g.filter(x => x.domaine && x.fin_validite)
           .map(x => ({ aptitude_id: pers.id, domaine: x.domaine, role: x.role || 'formateur', fin_validite: x.fin_validite }));
         if (qualis.length) {
-          const { error: eq } = await sb.from('qualifications').upsert(qualis, { onConflict: 'aptitude_id,domaine' });
+          const { error: eq } = await sb.from('qualifications').upsert(qualis, { onConflict: 'aptitude_id,domaine,role' });
           if (eq) return toast(eq.message, false);
           nbQ += qualis.length;
         }
@@ -480,7 +592,7 @@ async function ouvrirSession(sessionId) {
 
   const onglets = [
     ['stagiaires', 'Stagiaires'], ['formateurs', 'Formateurs'], ['garde', 'Feuille de garde'],
-    ['evaluations', 'Évaluations'], ['validation', 'Validation'], ['comparatif', 'Comparatif'],
+    ['evaluations', 'Évaluations'], ['msp', 'Suivi MSP'], ['validation', 'Validation'], ['comparatif', 'Comparatif'],
   ];
   $('session-onglets').innerHTML = onglets.map(([id, lbl]) =>
     `<button id="ong-${id}" onclick="ongletSession('${id}')">${lbl}</button>`).join('');
@@ -492,7 +604,7 @@ function ongletSession(id) {
   document.querySelectorAll('#session-onglets button').forEach(b => b.classList.remove('actif'));
   $('ong-' + id).classList.add('actif');
   ({ stagiaires: ongletStagiaires, formateurs: ongletFormateurs, garde: ongletGarde,
-     evaluations: ongletEvaluations, validation: ongletValidation, comparatif: ongletComparatif }[id])();
+     evaluations: ongletEvaluations, msp: ongletSuiviMSP, validation: ongletValidation, comparatif: ongletComparatif }[id])();
 }
 
 // ---------- Onglet Stagiaires ----------
@@ -593,8 +705,15 @@ async function ongletFormateurs() {
   const domComp = S.formation ? S.formation.domaine_competence : null;
   const dejaIds = S.data.formateurs.map(f => f.aptitude_id).filter(Boolean);
   const dejaNoms = S.data.formateurs.map(f => f.nom);
+  const auj = new Date().toISOString().slice(0, 10);
   const dispo = (apt || [])
-    .map(a => ({ a, q: (a.qualifications || []).find(q => !domComp || q.domaine === domComp) }))
+    .map(a => {
+      // Une personne peut avoir plusieurs qualifications dans le même domaine (formateur/RP/for de for) :
+      // on privilégie une qualification encore valide.
+      const quals = (a.qualifications || []).filter(q => !domComp || q.domaine === domComp);
+      const q = quals.find(q => q.fin_validite >= auj) || quals[0];
+      return { a, q };
+    })
     .filter(x => x.q && !dejaIds.includes(x.a.id) && !dejaNoms.includes(x.a.prenom + ' ' + x.a.nom));
 
   $('session-contenu').innerHTML = `
@@ -606,7 +725,7 @@ async function ongletFormateurs() {
       ${dispo.length ? `
         <select id="fo-apt">${dispo.map(x =>
           `<option value="${x.a.id}" data-fin="${x.q.fin_validite}" data-nom="${esc(x.a.prenom + ' ' + x.a.nom)}">
-            ${esc(x.a.grade || '')} ${esc(x.a.prenom)} ${esc(x.a.nom)} (${esc(x.a.cis || '')}) — ${x.q.role === 'rp' ? 'RP' : 'Formateur'} ${esc(x.q.domaine)}, valide jusqu'au ${x.q.fin_validite}</option>`).join('')}</select>
+            ${esc(x.a.grade || '')} ${esc(x.a.prenom)} ${esc(x.a.nom)} (${esc(x.a.cis || '')}) — ${libelleRole(x.q.role)} ${esc(x.q.domaine)}, valide jusqu'au ${x.q.fin_validite}</option>`).join('')}</select>
         <button class="btn" onclick="ajouterFormateur()">Inscrire</button>`
       : `<p class="info">Personne de qualifié${domComp ? ' en ' + esc(domComp) : ''} et disponible dans la liste d'aptitude (menu « Formateurs », vision GFor).</p>`}
     </div>`;
@@ -797,6 +916,59 @@ async function enregistrerEvaluation() {
   toast('Évaluation enregistrée'); ongletEvaluations();
 }
 
+// ---------- Onglet Suivi MSP (livrable 4 : suivi compétence groupe) ----------
+// Page 1 (groupe) : consultable par tout l'encadrement (jamais par les stagiaires, cet onglet
+// n'existe pas côté vision stagiaire). Page 2 (mots du formateur) : dupliquée côté stagiaire
+// (voir ecranAccueilStagiaire) mais filtrée sur ses seuls passages.
+function ongletSuiviMSP() {
+  const stagiaires = S.data.stagiaires;
+
+  const blocsGroupe = stagiaires.map(s => {
+    const mesPassages = S.data.equipiers.filter(e => e.stagiaire_id === s.id)
+      .map(e => S.data.passages.find(p => p.id === e.passage_id)).filter(Boolean).sort((a, b) => a.numero - b.numero);
+    if (!mesPassages.length) return '';
+    const lignesComp = S.formation.competences.map(c => {
+      const cellules = mesPassages.map(p => {
+        const ev = S.data.evaluations.find(x => x.passage_id === p.id && x.stagiaire_id === s.id);
+        const n = ev ? ev.notes[c.id] : null;
+        return `<td>${n && n !== 'NE' ? `<span class="niv niv-${NIV_CLASSE[n]}">${n}</span>` : '—'}</td>`;
+      }).join('');
+      return `<tr><td><span class="code">${esc(c.code)}</span></td>${cellules}</tr>`;
+    }).join('');
+    const dec = s.decision_jury === 'valide' ? '<span class="statut-valide">✅ Validé</span>'
+      : (s.decision_jury === 'non_valide' ? '<span class="statut-na">❌ Non validé</span>' : '<span class="info">— à décider —</span>');
+    return `<h3>${esc(s.prenom)} ${esc(s.nom)}</h3>
+      <div class="table-scroll"><table>
+        <tr><th>Compétence</th>${mesPassages.map(p => `<th>MSP n°${p.numero}</th>`).join('')}</tr>
+        ${lignesComp}
+      </table></div>
+      <p class="info">Décision jury : ${dec}</p>`;
+  }).join('');
+
+  const blocsMots = stagiaires.map(s => {
+    const mesPassages = S.data.equipiers.filter(e => e.stagiaire_id === s.id)
+      .map(e => S.data.passages.find(p => p.id === e.passage_id)).filter(Boolean).sort((a, b) => a.numero - b.numero);
+    const lignes = mesPassages.map(p => {
+      const ev = S.data.evaluations.find(x => x.passage_id === p.id && x.stagiaire_id === s.id);
+      return `<tr><td>MSP n°${p.numero}</td><td>${ev && ev.commentaire ? esc(ev.commentaire) : '—'}</td></tr>`;
+    }).join('');
+    if (!lignes) return '';
+    return `<h3>${esc(s.prenom)} ${esc(s.nom)}</h3><table><tr><th>Passage</th><th>Mot du formateur</th></tr>${lignes}</table>`;
+  }).join('');
+
+  $('session-contenu').innerHTML = `
+    <div class="carte">
+      <h2>Suivi par mise en situation (MSP) — vue groupe</h2>
+      <div class="info">Détail compétence par compétence et par passage, pour tous les stagiaires de la session. Réservé à l'encadrement.</div>
+      ${blocsGroupe || '<p class="info">Aucun passage enregistré.</p>'}
+    </div>
+    <div class="carte">
+      <h2>Mots du formateur par MSP</h2>
+      <div class="info">Chaque stagiaire peut aussi consulter cette page, mais uniquement pour ses propres passages, depuis son espace personnel.</div>
+      ${blocsMots || '<p class="info">Aucun commentaire enregistré.</p>'}
+    </div>`;
+}
+
 // ---------- Onglet Validation (règles RIOFE) ----------
 function bilanStagiaire(stagiaireId) {
   const evals = S.data.evaluations.filter(e => e.stagiaire_id === stagiaireId);
@@ -829,19 +1001,34 @@ function ongletValidation() {
       return `<td class="${cls}" title="acquis:${b.acquis} ECA:${b.eca} NA:${b.na}">${b.statut}<br><small>${b.acquis}A/${b.eca}E/${b.na}N</small></td>`;
     }).join('');
     const okMsp = nbPassages >= S.formation.nb_msp_min;
+    const dec = s.decision_jury || '';
     return `<tr><td><b>${esc(s.prenom)} ${esc(s.nom)}</b><br>
-      <small class="${okMsp ? 'statut-valide' : 'statut-na'}">${nbPassages}/${S.formation.nb_msp_min} MSP évaluées</small></td>${cellules}</tr>`;
+      <small class="${okMsp ? 'statut-valide' : 'statut-na'}">${nbPassages}/${S.formation.nb_msp_min} MSP évaluées</small><br>
+      <button class="btn petit secondaire" style="margin-top:4px" onclick="genererFicheSuivi(${s.id})">📄 Fiche PDF</button></td>${cellules}
+      <td><select onchange="enregistrerDecisionJury(${s.id}, this.value)" style="width:auto">
+        <option value="" ${dec === '' ? 'selected' : ''}>— À décider —</option>
+        <option value="valide" ${dec === 'valide' ? 'selected' : ''}>✅ Validé</option>
+        <option value="non_valide" ${dec === 'non_valide' ? 'selected' : ''}>❌ Non validé</option>
+      </select></td></tr>`;
   }).join('');
 
   $('session-contenu').innerHTML = `
     <div class="carte">
       <h2>Validation des compétences</h2>
-      <div class="info">Règle RIOFE : compétence grisée = « acquise » (A ou A+) 2 fois minimum · ${S.formation.nb_msp_min} MSP évaluées minimum par stagiaire. Détail par case : nb Acquis / ECA / NA.</div>
+      <div class="info">Règle RIOFE : compétence grisée = « acquise » (A ou A+) 2 fois minimum · ${S.formation.nb_msp_min} MSP évaluées minimum par stagiaire. Détail par case : nb Acquis / ECA / NA. La colonne « Décision jury » est la décision finale de la commission de certification.</div>
       <div class="table-scroll"><table>
-        <tr><th>Stagiaire</th>${comps.map(c => `<th title="${esc(c.libelle)}">${esc(c.code)}</th>`).join('')}</tr>
+        <tr><th>Stagiaire</th>${comps.map(c => `<th title="${esc(c.libelle)}">${esc(c.code)}</th>`).join('')}<th>Décision jury</th></tr>
         ${lignes}
       </table></div>
     </div>`;
+}
+
+async function enregistrerDecisionJury(stagiaireId, valeur) {
+  const { error } = await sb.from('stagiaires').update({ decision_jury: valeur || null }).eq('id', stagiaireId);
+  if (error) return toast(error.message, false);
+  const s = S.data.stagiaires.find(x => x.id === stagiaireId);
+  if (s) s.decision_jury = valeur || null;
+  toast('Décision enregistrée');
 }
 
 // ---------- Onglet Comparatif auto-éval / éval formateur ----------
@@ -858,6 +1045,8 @@ function ongletComparatif() {
     </div>`;
 }
 
+// Comparatif façon grille RIOFE (p.25) : chaque compétence avec sa note formateur (A+/A/ECA/NA)
+// et, juste en dessous, ses critères d'auto-évaluation rattachés (0 à 10), comme sur la fiche papier.
 function afficherComparatif(stagiaireId, zoneId) {
   if (!stagiaireId) return;
   const passages = S.data.equipiers
@@ -870,23 +1059,29 @@ function afficherComparatif(stagiaireId, zoneId) {
     const auto = S.data.autoevaluations.find(x => x.passage_id === p.id && x.stagiaire_id === stagiaireId);
     const theme = S.formation.themes.find(t => t.id === p.theme_id);
     if (!ev && !auto) return '';
-    const lignesEval = ev ? S.formation.competences.map(c => {
-      const n = ev.notes[c.id];
-      return n && n !== 'NE' ? `<tr><td>${esc(c.code)} ${esc(c.libelle.slice(0, 60))}…</td>
-        <td><span class="niv niv-${NIV_CLASSE[n]}">${n}</span></td></tr>` : '';
-    }).join('') : '';
-    const lignesAuto = auto ? S.formation.criteres.map(cr => {
-      const n = auto.notes[cr.id];
-      return n ? `<tr><td>${esc(cr.libelle)}</td><td><b>${n}</b>/10</td></tr>` : '';
-    }).join('') : '';
+
+    const lignesComp = S.formation.competences.map(c => {
+      const n = ev ? ev.notes[c.id] : null;
+      const criteresComp = S.formation.criteres.filter(cr => cr.competence_id === c.id);
+      const sousLignes = criteresComp.map(cr => {
+        const v = auto ? auto.notes[cr.id] : null;
+        if (!n && !v) return '';
+        return `<tr><td style="padding-left:22px;color:#666">${esc(cr.libelle)}</td><td>${v ? '<b>' + v + '</b>/10' : '<span class="info">—</span>'}</td></tr>`;
+      }).join('');
+      if ((!n || n === 'NE') && !sousLignes) return '';
+      return `<tr><td><span class="code">${esc(c.code)}</span> ${esc(c.libelle.slice(0, 70))}…</td>
+        <td>${n && n !== 'NE' ? `<span class="niv niv-${NIV_CLASSE[n]}">${n}</span>` : '<span class="info">non évalué</span>'}</td></tr>${sousLignes}`;
+    }).join('');
+
     return `<h3>Passage n°${p.numero} · ${esc(p.jour)} · ${esc(theme ? theme.libelle : '')}</h3>
-      <div class="ligne">
-        <div><b>Évaluation formateur</b> ${ev ? '(' + esc(ev.formateur || '') + ', ressenti ' + (ev.ressenti_formateur ?? '—') + '/5)' : ''}
-          <table>${lignesEval || '<tr><td class="info">Pas encore saisie</td></tr>'}</table>
-          ${ev && ev.commentaire ? `<p class="info">« ${esc(ev.commentaire)} »</p>` : ''}</div>
-        <div><b>Auto-évaluation stagiaire</b> ${auto && auto.ressenti ? '(ressenti : ' + esc(auto.ressenti) + ')' : ''}
-          <table>${lignesAuto || '<tr><td class="info">Pas encore saisie</td></tr>'}</table></div>
-      </div>`;
+      <div class="info">
+        ${ev ? 'Formateur : ' + esc(ev.formateur || '') + ' · ressenti ' + (ev.ressenti_formateur ?? '—') + '/5' : 'Pas encore d’évaluation formateur'}
+        ${auto && auto.ressenti ? ' · Ressenti stagiaire : ' + esc(auto.ressenti) : ''}
+      </div>
+      <table><tr><th>Compétence / critère</th><th>Note formateur / auto-éval</th></tr>
+        ${lignesComp || '<tr><td colspan="2" class="info">Aucune donnée</td></tr>'}
+      </table>
+      ${ev && ev.commentaire ? `<p class="info">« ${esc(ev.commentaire)} »</p>` : ''}`;
   }).join('');
   $(zoneId).innerHTML = blocs || '<p class="info">Aucune évaluation pour ce stagiaire.</p>';
 }
@@ -921,6 +1116,16 @@ async function ecranAccueilStagiaire() {
       <p class="info">Ton auto-évaluation face au regard du formateur, passage par passage.</p>
       <div id="stag-cmp"></div>
       <button class="btn secondaire" onclick="afficherComparatif(${stagiaireId}, 'stag-cmp')">Afficher</button>
+    </div>
+    <div class="carte">
+      <h2>Mots de mes formateurs</h2>
+      <p class="info">Le petit mot laissé par le formateur à l'issue de chacune de tes mises en situation.</p>
+      <table><tr><th>Passage</th><th>Mot du formateur</th></tr>
+        ${mesPassages.map(p => {
+          const ev = S.data.evaluations.find(x => x.passage_id === p.id && x.stagiaire_id === stagiaireId);
+          return `<tr><td>MSP n°${p.numero}</td><td>${ev && ev.commentaire ? esc(ev.commentaire) : '—'}</td></tr>`;
+        }).join('') || '<tr><td colspan="2" class="info">Aucun passage pour le moment.</td></tr>'}
+      </table>
     </div>`;
   show('ecran-stagiaire');
 }
