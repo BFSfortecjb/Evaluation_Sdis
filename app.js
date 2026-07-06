@@ -328,7 +328,33 @@ function ecranModifierAptitude(id) {
     </div>
     <label>Email (compte utilisateur)</label><input id="ma-email" type="email" value="${esc(a.email || '')}">
     <button class="btn" onclick="enregistrerModifAptitude(${a.id})">Enregistrer les corrections</button>
+
+    <h3>Compte de connexion</h3>
+    <div class="info">Si cette personne n'a jamais fini de créer son compte (cas fréquent : elle est dans la liste d'aptitude mais aucun compte de connexion n'existe encore), tu peux lui en créer un directement avec un mot de passe de ton choix — sans passer par un email.</div>
+    <label>Mot de passe à créer</label>
+    <input id="ma-mdp" type="password" placeholder="6 caractères minimum">
+    <button class="btn secondaire" onclick="creerCompteAptitudeExistante(${a.id})">Créer le compte avec ce mot de passe</button>
   </div>`;
+}
+
+async function creerCompteAptitudeExistante(id) {
+  const a = (window._apt || []).find(x => x.id === id);
+  const email = $('ma-email').value.trim().toLowerCase();
+  const mdp = $('ma-mdp').value;
+  if (!email) return toast('Renseigner un email avant de créer le compte', false);
+  if (mdp.length < 6) return toast('Mot de passe : 6 caractères minimum', false);
+  const { data: inscription, error } = await sb.auth.signUp({ email, password: mdp });
+  if (error) return toast(error.message, false);
+  if (inscription.session) {
+    // signUp a rendu actif le nouveau compte à la place du tien : on se déconnecte
+    // immédiatement pour ne pas rester connecté à sa place.
+    await sb.auth.signOut();
+    toast('Compte créé pour ' + (a ? a.prenom + ' ' + a.nom : email) + ' — reconnecte-toi maintenant.');
+    show('ecran-login');
+  } else {
+    toast('Compte créé — confirmation par email encore requise avant sa 1ère connexion.');
+    ecranGestionFormateurs();
+  }
 }
 
 async function enregistrerModifAptitude(id) {
