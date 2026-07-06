@@ -3,7 +3,11 @@
 
 const NIVEAUX = ['A+', 'A', 'ECA', 'NA', 'NE'];
 const NIV_CLASSE = { 'A+': 'Aplus', 'A': 'A', 'ECA': 'ECA', 'NA': 'NA', 'NE': 'NE' };
-const JOURS = ['J1', 'J2', 'J3', 'J4', 'J5'];
+// Nombre de jours réglable par formation (Paramètres formations) — J1..Jn
+function joursFormation() {
+  const n = (S.formation && S.formation.nb_jours) || 5;
+  return Array.from({ length: n }, (_, i) => 'J' + (i + 1));
+}
 
 // ============================================================
 // ACCUEIL STAFF — tableau de bord + changement de vision
@@ -52,7 +56,8 @@ function majMenu(actif) {
   const peutCreer = S.vision === 'rp' || S.vision === 'gfor';
   m.innerHTML = `<button class="${actif === 'dash' ? 'actif' : ''}" onclick="ecranAccueilStaff()">🏠 Tableau de bord</button>` +
     (peutCreer ? `<button class="${actif === 'new' ? 'actif' : ''}" onclick="ecranNouvelleSession()">➕ Nouvelle session</button>` : '') +
-    `<button class="${actif === 'apt' ? 'actif' : ''}" onclick="ecranGestionFormateurs()">👨‍🏫 Formateurs</button>`;
+    `<button class="${actif === 'apt' ? 'actif' : ''}" onclick="ecranGestionFormateurs()">👨‍🏫 Formateurs</button>` +
+    (S.vision === 'gfor' ? `<button class="${actif === 'param-form' ? 'actif' : ''}" onclick="ecranParametresFormations()">⚙️ Paramètres formations</button>` : '');
   m.style.display = '';
 }
 
@@ -104,6 +109,7 @@ async function ecranNouvelleSession() {
   ]);
   if (f.error) return toast(f.error.message, false);
   window._aptRP = apt.data || [];
+  window._formations = f.data || [];
   $('staff-dashboard').innerHTML = `<div class="carte">
     <h2>Nouvelle session</h2>
     <div class="ligne">
@@ -629,6 +635,9 @@ async function creerSession() {
   const dateFinS = $('ns-fin').value || null;
   if (optR && optR.value && dateFinS && optR.dataset.fin < dateFinS)
     return toast('Impossible : la qualification RP de ' + optR.dataset.nom + ' expire le ' + optR.dataset.fin + ', avant la fin de la session.', false);
+  // Seuils NA/ECA « avis du jury » repris des valeurs par défaut de la formation
+  // (réglables ensuite finement session par session dans l'onglet Paramètres).
+  const formationChoisie = (window._formations || []).find(x => x.id === Number(sel.value));
   const { data, error } = await sb.from('sessions').insert({
     formation_id: Number(sel.value),
     code_acces: code,
@@ -636,6 +645,8 @@ async function creerSession() {
     date_debut: $('ns-debut').value || null,
     date_fin: $('ns-fin').value || null,
     responsable,
+    seuil_na_jury: (formationChoisie && formationChoisie.seuil_na_jury_defaut) || 2,
+    seuil_eca_jury: (formationChoisie && formationChoisie.seuil_eca_jury_defaut) || 4,
   }).select().single();
   if (error) return toast(error.message, false);
   toast('Session créée — code stagiaire : ' + code);
@@ -857,7 +868,7 @@ function ongletGarde() {
       </table></div>
       <h3>Programmer un passage</h3>
       <div class="ligne">
-        <div><label>Jour</label><select id="pa-jour">${JOURS.map(j => `<option>${j}</option>`).join('')}</select></div>
+        <div><label>Jour</label><select id="pa-jour">${joursFormation().map(j => `<option>${j}</option>`).join('')}</select></div>
         <div><label>Thème</label><select id="pa-theme">${S.formation.themes.map(t => `<option value="${t.id}">${esc(t.libelle)}</option>`).join('')}</select></div>
       </div>
       <div class="ligne">
@@ -970,7 +981,7 @@ function formNouvelleMSP() {
       <h2>Nouvelle MSP à évaluer</h2>
       <div class="info">Le numéro de passage est attribué automatiquement.${S.user ? ' Évaluateur : ' + esc(S.user.nom) + '.' : ''}</div>
       <div class="ligne">
-        <div><label>Jour</label><select id="pa2-jour">${JOURS.map(j => `<option>${j}</option>`).join('')}</select></div>
+        <div><label>Jour</label><select id="pa2-jour">${joursFormation().map(j => `<option>${j}</option>`).join('')}</select></div>
         <div><label>Thème</label><select id="pa2-theme">${S.formation.themes.map(t => `<option value="${t.id}">${esc(t.libelle)}</option>`).join('')}</select></div>
       </div>
       <label>Sujet / cas concret</label>
@@ -1501,4 +1512,202 @@ async function enregistrerAutoEval() {
   if (error) return toast(error.message, false);
   toast('Auto-évaluation enregistrée');
   ecranAccueilStagiaire();
+}
+
+// ============================================================
+// PARAMÈTRES FORMATIONS (GFor) — réglage global, indépendant des sessions :
+// création de formation, seuils A/ECA/NA par défaut, barème RP/formateurs
+// vis-à-vis du nombre de stagiaires (RIOFE), nombre de jours, compétences.
+// ============================================================
+let _baremeEnCours = [];
+
+async function ecranParametresFormations() {
+  majMenu('param-form');
+  show('ecran-staff-accueil');
+  const { data: formations, error } = await sb.from('formations').select('*').order('libelle');
+  if (error) return toast(error.message, false);
+  window._formations = formations || [];
+
+  const lignes = (formations || []).map(f => `<tr>
+      <td><span class="badge" style="background:${esc(f.couleur)};color:#fff">${esc(f.domaine)}</span></td>
+      <td><b>${esc(f.libelle)}</b> <span class="info">(${esc(f.code)})</span>${f.actif ? '' : ' <span class="info">— inactive</span>'}</td>
+      <td>${f.nb_jours}</td>
+      <td>${f.nb_stagiaires_max}</td>
+      <td>${f.nb_msp_min} (+${f.nb_msp_rattrapage} rattrap.)</td>
+      <td>NA ≥ ${f.seuil_na_jury_defaut ?? 2} / ECA ≥ ${f.seuil_eca_jury_defaut ?? 4}</td>
+      <td style="white-space:nowrap">
+        <button class="btn petit secondaire" onclick="ecranFormulaireFormation(${f.id})">✏️</button>
+        <button class="btn petit secondaire" onclick="ecranCompetencesFormation(${f.id})">📋 Compétences</button>
+      </td>
+    </tr>`).join('');
+
+  $('staff-dashboard').innerHTML = `<div class="carte">
+    <h2>Paramètres formations</h2>
+    <div class="info">Réglages généraux, valables pour toutes les sessions à venir de la formation (le RP/GFor peut encore affiner NA/ECA session par session dans l'onglet « Paramètres » de chaque session).</div>
+    <div class="table-scroll"><table>
+      <tr><th>Domaine</th><th>Formation</th><th>Jours</th><th>Stag. max</th><th>MSP requises</th><th>Avis du jury si</th><th></th></tr>
+      ${lignes}
+    </table></div>
+    <button class="btn" onclick="ecranFormulaireFormation()">➕ Nouvelle formation</button>
+  </div>`;
+}
+
+function _rendreBaremeEnCours() {
+  $('fm-bareme-liste').innerHTML = _baremeEnCours.map((t, i) => `<div class="ligne" style="align-items:center">
+      <span>de <b>${t.min}</b> à <b>${t.max}</b> stagiaires → <b>${t.formateurs}</b> formateur(s)</span>
+      <a onclick="_baremeEnCours.splice(${i},1);_rendreBaremeEnCours()" style="cursor:pointer;color:var(--warn);font-weight:bold"> ✕</a>
+    </div>`).join('') || '<p class="info">Aucune tranche définie — le calcul du besoin en formateurs sera désactivé.</p>';
+}
+
+function ajouterTrancheBareme() {
+  const min = Number($('fm-bar-min').value), max = Number($('fm-bar-max').value), formateurs = Number($('fm-bar-form').value);
+  if (!min || !max || max < min || !formateurs) return toast('Tranche invalide (min/max/formateurs)', false);
+  _baremeEnCours.push({ min, max, formateurs });
+  _baremeEnCours.sort((a, b) => a.min - b.min);
+  $('fm-bar-min').value = ''; $('fm-bar-max').value = ''; $('fm-bar-form').value = '';
+  _rendreBaremeEnCours();
+}
+
+function ecranFormulaireFormation(id) {
+  const f = id ? (window._formations || []).find(x => x.id === id) : null;
+  _baremeEnCours = f ? JSON.parse(JSON.stringify(f.bareme_formateurs || [])) : [];
+  $('staff-dashboard').innerHTML = `<div class="carte">
+    <span class="lien-retour" onclick="ecranParametresFormations()">← Retour aux paramètres formations</span>
+    <h2>${f ? 'Modifier — ' + esc(f.libelle) : 'Nouvelle formation'}</h2>
+    <div class="ligne">
+      <div><label>Code (ex : SUAP)</label><input id="fm-code" value="${esc(f?.code || '')}"></div>
+      <div><label>Libellé</label><input id="fm-libelle" value="${esc(f?.libelle || '')}"></div>
+    </div>
+    <div class="ligne">
+      <div><label>Domaine (affichage)</label><select id="fm-domaine">${DOMAINES_COMP.map(d => `<option ${d === f?.domaine ? 'selected' : ''}>${d}</option>`).join('')}</select></div>
+      <div><label>Couleur (badge)</label><input id="fm-couleur" type="color" value="${esc(f?.couleur || '#607d8b')}"></div>
+    </div>
+    <div class="ligne">
+      <div><label>Nombre de jours de formation</label><input id="fm-jours" type="number" min="1" value="${f?.nb_jours ?? 5}"></div>
+      <div><label>Nombre de stagiaires max (RIOFE)</label><input id="fm-stagmax" type="number" min="1" value="${f?.nb_stagiaires_max ?? 12}"></div>
+    </div>
+    <div class="ligne">
+      <div><label>Nombre de MSP requises</label><input id="fm-mspmin" type="number" min="1" value="${f?.nb_msp_min ?? 4}"></div>
+      <div><label>Dont MSP de rattrapage</label><input id="fm-msprattrap" type="number" min="0" value="${f?.nb_msp_rattrapage ?? 1}"></div>
+    </div>
+    <div class="ligne">
+      <div><label>Nombre de RP requis</label><input id="fm-nbrp" type="number" min="1" value="${f?.nb_rp_requis ?? 1}"></div>
+      <div><label>Formation active</label><select id="fm-actif"><option value="true" ${f?.actif !== false ? 'selected' : ''}>Oui</option><option value="false" ${f?.actif === false ? 'selected' : ''}>Non</option></select></div>
+    </div>
+
+    <h3>Avis du jury — seuils par défaut</h3>
+    <div class="info">Nombre de ECA ou de NA sur une même compétence à partir duquel la validation passe en « Avis du jury ». Valeur reprise à la création de chaque nouvelle session de cette formation (réglable ensuite session par session).</div>
+    <div class="ligne">
+      <div><label>Nombre de NA</label><input id="fm-seuil-na" type="number" min="1" value="${f?.seuil_na_jury_defaut ?? 2}"></div>
+      <div><label>Nombre de ECA</label><input id="fm-seuil-eca" type="number" min="1" value="${f?.seuil_eca_jury_defaut ?? 4}"></div>
+    </div>
+
+    <h3>Barème d'encadrement (RIOFE) — RP/formateurs vis-à-vis du nombre de stagiaires</h3>
+    <div id="fm-bareme-liste" style="margin-bottom:8px"></div>
+    <div class="ligne">
+      <div><label>De (stagiaires)</label><input id="fm-bar-min" type="number" min="1"></div>
+      <div><label>À (stagiaires)</label><input id="fm-bar-max" type="number" min="1"></div>
+      <div><label>Formateurs requis</label><input id="fm-bar-form" type="number" min="1"></div>
+      <div style="align-self:flex-end"><button class="btn petit" onclick="ajouterTrancheBareme()">➕ Ajouter</button></div>
+    </div>
+
+    <button class="btn" style="margin-top:16px" onclick="enregistrerFormation(${f ? f.id : 'null'})">Enregistrer la formation</button>
+  </div>`;
+  _rendreBaremeEnCours();
+}
+
+async function enregistrerFormation(id) {
+  const code = $('fm-code').value.trim().toUpperCase();
+  const libelle = $('fm-libelle').value.trim();
+  if (!code || !libelle) return toast('Code et libellé requis', false);
+  const payload = {
+    code, libelle,
+    domaine: $('fm-domaine').value,
+    couleur: $('fm-couleur').value,
+    nb_jours: Number($('fm-jours').value) || 5,
+    nb_stagiaires_max: Number($('fm-stagmax').value) || 12,
+    nb_msp_min: Number($('fm-mspmin').value) || 4,
+    nb_msp_rattrapage: Number($('fm-msprattrap').value) || 0,
+    nb_rp_requis: Number($('fm-nbrp').value) || 1,
+    actif: $('fm-actif').value === 'true',
+    seuil_na_jury_defaut: Number($('fm-seuil-na').value) || 2,
+    seuil_eca_jury_defaut: Number($('fm-seuil-eca').value) || 4,
+    bareme_formateurs: _baremeEnCours,
+  };
+  const req = id ? sb.from('formations').update(payload).eq('id', id) : sb.from('formations').insert(payload);
+  const { error } = await req;
+  if (error) return toast(error.message, false);
+  toast(id ? 'Formation mise à jour' : 'Formation créée');
+  ecranParametresFormations();
+}
+
+// ---------- Compétences d'une formation (référentiel RIOFE) ----------
+async function ecranCompetencesFormation(formationId) {
+  const f = (window._formations || []).find(x => x.id === formationId);
+  const { data: comp, error } = await sb.from('competences').select('*').eq('formation_id', formationId).order('ordre');
+  if (error) return toast(error.message, false);
+  window._competences = comp || [];
+
+  const lignes = (comp || []).map(c => `<tr>
+      <td><input value="${esc(c.ordre)}" type="number" style="width:56px" id="cp-ordre-${c.id}"></td>
+      <td><input value="${esc(c.code)}" style="width:70px" id="cp-code-${c.id}"></td>
+      <td><input value="${esc(c.libelle)}" id="cp-lib-${c.id}"></td>
+      <td style="text-align:center"><input type="checkbox" id="cp-grisee-${c.id}" ${c.grisee ? 'checked' : ''} style="width:auto"></td>
+      <td style="white-space:nowrap">
+        <button class="btn petit secondaire" onclick="enregistrerCompetence(${c.id})">💾</button>
+        <button class="btn petit secondaire" onclick="supprCompetence(${c.id})">✕</button>
+      </td>
+    </tr>`).join('');
+
+  $('staff-dashboard').innerHTML = `<div class="carte">
+    <span class="lien-retour" onclick="ecranParametresFormations()">← Retour aux paramètres formations</span>
+    <h2>Compétences — ${esc(f ? f.libelle : '')}</h2>
+    <div class="info">Compétence « grisée » (RIOFE) : doit être acquise 2 fois pour être validée. Sinon, un seul acquis/ECA suffit.</div>
+    <div class="table-scroll"><table>
+      <tr><th>Ordre</th><th>Code</th><th>Libellé</th><th>Grisée</th><th></th></tr>
+      ${lignes}
+    </table></div>
+    <h3>Ajouter une compétence</h3>
+    <div class="ligne">
+      <div><label>Ordre</label><input id="cp-new-ordre" type="number" value="${(comp || []).length + 1}"></div>
+      <div><label>Code</label><input id="cp-new-code" placeholder="ex : C8"></div>
+      <div><label>Libellé</label><input id="cp-new-lib"></div>
+      <div><label>Grisée</label><input type="checkbox" id="cp-new-grisee" checked style="width:auto"></div>
+      <div style="align-self:flex-end"><button class="btn petit" onclick="ajouterCompetence(${formationId})">➕ Ajouter</button></div>
+    </div>
+  </div>`;
+}
+
+async function enregistrerCompetence(id) {
+  const { error } = await sb.from('competences').update({
+    ordre: Number($('cp-ordre-' + id).value) || 1,
+    code: $('cp-code-' + id).value.trim(),
+    libelle: $('cp-lib-' + id).value.trim(),
+    grisee: $('cp-grisee-' + id).checked,
+  }).eq('id', id);
+  if (error) return toast(error.message, false);
+  toast('Compétence mise à jour');
+}
+
+async function ajouterCompetence(formationId) {
+  const code = $('cp-new-code').value.trim(), libelle = $('cp-new-lib').value.trim();
+  if (!code || !libelle) return toast('Code et libellé requis', false);
+  const { error } = await sb.from('competences').insert({
+    formation_id: formationId, code, libelle,
+    ordre: Number($('cp-new-ordre').value) || 1,
+    grisee: $('cp-new-grisee').checked,
+  });
+  if (error) return toast(error.message, false);
+  toast('Compétence ajoutée');
+  ecranCompetencesFormation(formationId);
+}
+
+async function supprCompetence(id) {
+  if (!confirm('Supprimer cette compétence ? Les évaluations déjà enregistrées sur cette compétence resteront en base mais ne seront plus rattachées à un référentiel affiché.')) return;
+  const { error } = await sb.from('competences').delete().eq('id', id);
+  if (error) return toast(error.message, false);
+  const formationId = (window._competences || []).find(c => c.id === id)?.formation_id;
+  toast('Compétence supprimée');
+  if (formationId) ecranCompetencesFormation(formationId);
+  else ecranParametresFormations();
 }
