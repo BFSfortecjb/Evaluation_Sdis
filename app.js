@@ -739,13 +739,20 @@ function ongletSession(id) {
 // ---------- Onglet Stagiaires ----------
 function ongletStagiaires() {
   const lignes = S.data.stagiaires.map(s => `
-    <tr><td>${esc(s.nom)}</td><td>${esc(s.prenom)}</td><td>${esc(s.matricule || '')}</td><td>${esc(s.cis || '')}</td>
-    <td><button class="btn petit secondaire" onclick="supprStagiaire(${s.id})">✕</button></td></tr>`).join('');
+    <tr>
+      <td>${s.photo_url ? `<img src="${esc(s.photo_url)}" alt="" style="width:32px;height:32px;border-radius:50%;object-fit:cover;vertical-align:middle">` : `<span class="avatar-stag" style="width:32px;height:32px;font-size:11px">${esc(initiales(s))}</span>`}</td>
+      <td>${esc(s.nom)}</td><td>${esc(s.prenom)}</td><td>${esc(s.matricule || '')}</td><td>${esc(s.cis || '')}</td>
+      <td style="white-space:nowrap">
+        <label class="btn petit secondaire" style="cursor:pointer">📷<input type="file" accept="image/*" style="display:none" onchange="uploaderPhotoStagiaire(${s.id}, this)"></label>
+        <button class="btn petit secondaire" onclick="supprStagiaire(${s.id})">✕</button>
+      </td>
+    </tr>`).join('');
   $('session-contenu').innerHTML = `
     <div class="carte">
       <h2>Stagiaires (${S.data.stagiaires.length})</h2>
+      <div class="info">📷 = ajouter/remplacer la photo du stagiaire (utilisée dans la grille d'évaluation par équipe).</div>
       <div class="table-scroll"><table>
-        <tr><th>Nom</th><th>Prénom</th><th>Matricule</th><th>CIS</th><th></th></tr>${lignes}
+        <tr><th>Photo</th><th>Nom</th><th>Prénom</th><th>Matricule</th><th>CIS</th><th></th></tr>${lignes}
       </table></div>
       <h3>Ajouter un stagiaire</h3>
       <div class="ligne">
@@ -826,6 +833,21 @@ async function supprStagiaire(id) {
   const { error } = await sb.from('stagiaires').delete().eq('id', id);
   if (error) return toast(error.message, false);
   await chargerDonneesSession(S.session.id); ongletStagiaires();
+}
+
+// ---------- Photo du stagiaire (bucket Supabase Storage « photos-stagiaires ») ----------
+async function uploaderPhotoStagiaire(id, input) {
+  const fichier = input.files[0];
+  if (!fichier) return;
+  if (fichier.size > 3 * 1024 * 1024) return toast('Photo trop lourde (3 Mo maximum)', false);
+  const ext = (fichier.name.split('.').pop() || 'jpg').toLowerCase();
+  const chemin = id + '/' + Date.now() + '.' + ext;
+  const { error: eUp } = await sb.storage.from('photos-stagiaires').upload(chemin, fichier, { upsert: true });
+  if (eUp) return toast('Envoi impossible : ' + eUp.message, false);
+  const { data: pub } = sb.storage.from('photos-stagiaires').getPublicUrl(chemin);
+  const { error: eMaj } = await sb.from('stagiaires').update({ photo_url: pub.publicUrl }).eq('id', id);
+  if (eMaj) return toast(eMaj.message, false);
+  await chargerDonneesSession(S.session.id); ongletStagiaires(); toast('Photo enregistrée');
 }
 
 // ---------- Onglet Formateurs (inscription depuis la liste d'aptitude) ----------
@@ -1093,7 +1115,9 @@ function formEvaluationPassage(passageId) {
 
   const theme = S.formation.themes.find(t => t.id === p.theme_id);
   const colonneStag = s => `<div class="colonne-stag">
-      <div class="avatar-stag">${esc(initiales(s))}</div>
+      ${s.photo_url
+        ? `<img src="${esc(s.photo_url)}" alt="" class="avatar-stag" style="object-fit:cover">`
+        : `<div class="avatar-stag">${esc(initiales(s))}</div>`}
       <div class="nom-stag">${esc(s.prenom)}<br>${esc(s.nom)}</div>
     </div>`;
 
@@ -1576,7 +1600,7 @@ async function ecranParametresFormations() {
     <h2>Paramètres formations</h2>
     <div class="info">Réglages généraux, valables pour toutes les sessions à venir de la formation (le RP/GFor peut encore affiner NA/ECA session par session dans l'onglet « Paramètres » de chaque session).</div>
     <div class="table-scroll"><table>
-      <tr><th>Domaine</th><th>Formation</th><th>Jours</th><th>Stag. max</th><th>MSP requises</th><th>Avis du jury si</th><th></th></tr>
+      <tr><th>Domaine</th><th>Formation</th><th>Jours</th><th>Stag. (indicatif)</th><th>MSP requises</th><th>Avis du jury si</th><th></th></tr>
       ${lignes}
     </table></div>
     <button class="btn" onclick="ecranFormulaireFormation()">➕ Nouvelle formation</button>
@@ -1615,7 +1639,8 @@ function ecranFormulaireFormation(id) {
     </div>
     <div class="ligne">
       <div><label>Nombre de jours de formation</label><input id="fm-jours" type="number" min="1" value="${f?.nb_jours ?? 5}"></div>
-      <div><label>Nombre de stagiaires max (RIOFE)</label><input id="fm-stagmax" type="number" min="1" value="${f?.nb_stagiaires_max ?? 12}"></div>
+      <div><label>Nombre de stagiaires (valeur indicative par défaut)</label><input id="fm-stagmax" type="number" min="1" value="${f?.nb_stagiaires_max ?? 12}">
+        <div class="info">Ce n'est pas un plafond réglementaire fixe : le nombre réel de stagiaires par session dépend de l'équipe pédagogique. Cette valeur ne sert que d'estimation par défaut (jauge du tableau de bord) tant que les stagiaires ne sont pas encore inscrits. Le besoin réel en formateurs est calculé via le barème d'encadrement ci-dessous, quel que soit l'effectif réel.</div></div>
     </div>
     <div class="ligne">
       <div><label>Nombre de MSP requises</label><input id="fm-mspmin" type="number" min="1" value="${f?.nb_msp_min ?? 4}"></div>
