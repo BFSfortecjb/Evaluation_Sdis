@@ -594,6 +594,8 @@ async function ouvrirSession(sessionId) {
     ['stagiaires', 'Stagiaires'], ['formateurs', 'Formateurs'], ['garde', 'Feuille de garde'],
     ['evaluations', 'Évaluations'], ['msp', 'Suivi MSP'], ['validation', 'Validation'], ['comparatif', 'Comparatif'],
   ];
+  // Réglages du stage : réservés au RP et au GFor
+  if (S.vision === 'rp' || S.vision === 'gfor') onglets.push(['parametres', 'Paramètres']);
   $('session-onglets').innerHTML = onglets.map(([id, lbl]) =>
     `<button id="ong-${id}" onclick="ongletSession('${id}')">${lbl}</button>`).join('');
   show('ecran-session');
@@ -604,7 +606,8 @@ function ongletSession(id) {
   document.querySelectorAll('#session-onglets button').forEach(b => b.classList.remove('actif'));
   $('ong-' + id).classList.add('actif');
   ({ stagiaires: ongletStagiaires, formateurs: ongletFormateurs, garde: ongletGarde,
-     evaluations: ongletEvaluations, msp: ongletSuiviMSP, validation: ongletValidation, comparatif: ongletComparatif }[id])();
+     evaluations: ongletEvaluations, msp: ongletSuiviMSP, validation: ongletValidation, comparatif: ongletComparatif,
+     parametres: ongletParametresStage }[id])();
 }
 
 // ---------- Onglet Stagiaires ----------
@@ -1021,10 +1024,31 @@ function celluleBarre(n, max, couleur) {
   return `<td style="background:linear-gradient(to right, ${couleur} ${pct}%, transparent ${pct}%)">${n}</td>`;
 }
 
-function ongletSuiviMSP() {
-  const stagiaires = S.data.stagiaires;
+let _mspVue = 'competences';
 
-  const blocsGroupe = stagiaires.map(s => {
+const MSP_SOUS_ONGLETS = [
+  ['competences', 'Suivi des compétences'],
+  ['mots', 'Mots du formateur'],
+  ['formateur', 'Passages / formateur'],
+  ['theme', 'Passages / thème'],
+  ['cas', 'Passages / cas concret'],
+];
+
+function ongletSuiviMSP(vue) {
+  if (vue) _mspVue = vue;
+  const nav = `<div class="onglets" style="margin-bottom:10px">${MSP_SOUS_ONGLETS.map(([id, lbl]) =>
+    `<button class="${_mspVue === id ? 'actif' : ''}" onclick="ongletSuiviMSP('${id}')">${lbl}</button>`).join('')}</div>`;
+  const rendus = {
+    competences: _mspVueCompetences, mots: _mspVueMots,
+    formateur: _mspVueFormateur, theme: _mspVueTheme, cas: _mspVueCas,
+  };
+  $('session-contenu').innerHTML = nav + rendus[_mspVue]();
+}
+
+// ---- Suivi des compétences : une colonne par MSP (numéro seul, pour rester lisible) ----
+function _mspVueCompetences() {
+  const stagiaires = S.data.stagiaires;
+  const blocs = stagiaires.map(s => {
     const mesPassages = S.data.equipiers.filter(e => e.stagiaire_id === s.id)
       .map(e => S.data.passages.find(p => p.id === e.passage_id)).filter(Boolean).sort((a, b) => a.numero - b.numero);
     if (!mesPassages.length) return '';
@@ -1036,20 +1060,26 @@ function ongletSuiviMSP() {
         return `<td>${n && n !== 'NE' ? `<span class="niv niv-${NIV_CLASSE[n]}">${n}</span>` : '—'}</td>`;
       }).join('');
       const b = bilan[c.id];
-      const cls = b.statut === 'Validé' ? 'statut-valide' : (b.statut === 'En cours' ? 'statut-eca' : (b.statut === '—' ? '' : 'statut-na'));
-      return `<tr><td><span class="code">${esc(c.code)}</span></td>${cellules}<td class="${cls}"><b>${b.statut}</b><br><small>${b.acquis}A/${b.eca}E/${b.na}N</small></td></tr>`;
+      const cls = classeStatutCompetence(b.statut);
+      return `<tr><td><span class="code">${esc(c.code)}</span></td>${cellules}<td class="${cls}"><b>${b.statut}</b></td></tr>`;
     }).join('');
     const dec = s.decision_jury === 'valide' ? '<span class="statut-valide">✅ Validé</span>'
       : (s.decision_jury === 'non_valide' ? '<span class="statut-na">❌ Non validé</span>' : '<span class="info">— à décider —</span>');
     return `<h3>${esc(s.prenom)} ${esc(s.nom)}</h3>
-      <div class="table-scroll"><table>
-        <tr><th>Compétence</th>${mesPassages.map(p => `<th>MSP n°${p.numero}</th>`).join('')}<th>Validation (règle RIOFE)</th></tr>
+      <div class="table-scroll"><table class="table-compacte">
+        <tr><th>Comp.</th>${mesPassages.map(p => `<th>${p.numero}</th>`).join('')}<th>Validation</th></tr>
         ${lignesComp}
       </table></div>
       <p class="info">Décision jury : ${dec}</p>`;
   }).join('');
+  return `<div class="carte">
+      <div class="info">Chaque colonne = le numéro de la MSP. Validation calculée selon la règle RIOFE (grisée = acquise 2 fois, blanche = a minima ECA).</div>
+      ${blocs || '<p class="info">Aucun passage enregistré.</p>'}
+    </div>`;
+}
 
-  const blocsMots = stagiaires.map(s => {
+function _mspVueMots() {
+  const blocs = S.data.stagiaires.map(s => {
     const mesPassages = S.data.equipiers.filter(e => e.stagiaire_id === s.id)
       .map(e => S.data.passages.find(p => p.id === e.passage_id)).filter(Boolean).sort((a, b) => a.numero - b.numero);
     const lignes = mesPassages.map(p => {
@@ -1059,39 +1089,51 @@ function ongletSuiviMSP() {
     if (!lignes) return '';
     return `<h3>${esc(s.prenom)} ${esc(s.nom)}</h3><table><tr><th>Passage</th><th>Mot du formateur</th></tr>${lignes}</table>`;
   }).join('');
+  return `<div class="carte">
+      <div class="info">Chaque stagiaire peut aussi consulter cette page, mais uniquement pour ses propres passages, depuis son espace personnel.</div>
+      ${blocs || '<p class="info">Aucun commentaire enregistré.</p>'}
+    </div>`;
+}
 
-  // ---- Nombre de passages par formateur (qui a évalué qui, et combien de fois) ----
+function _mspVueFormateur() {
+  const stagiaires = S.data.stagiaires;
   const nomsFormateurs = [...new Set(S.data.evaluations.map(e => e.formateur).filter(Boolean))];
-  let maxForm = 1;
-  const comptesForm = stagiaires.map(s => nomsFormateurs.map(f =>
+  let max = 1;
+  const comptes = stagiaires.map(s => nomsFormateurs.map(f =>
     S.data.evaluations.filter(e => e.stagiaire_id === s.id && e.formateur === f).length));
-  comptesForm.forEach(l => l.forEach(n => { if (n > maxForm) maxForm = n; }));
-  const tableFormateurs = nomsFormateurs.length ? `
-    <div class="table-scroll"><table>
+  comptes.forEach(l => l.forEach(n => { if (n > max) max = n; }));
+  const table = nomsFormateurs.length ? `
+    <div class="table-scroll"><table class="table-compacte">
       <tr><th>Stagiaire</th>${nomsFormateurs.map(f => `<th>${esc(f)}</th>`).join('')}</tr>
-      ${stagiaires.map((s, i) => `<tr><td>${esc(s.prenom)} ${esc(s.nom)}</td>${nomsFormateurs.map((f, j) => celluleBarre(comptesForm[i][j], maxForm, '#f06292')).join('')}</tr>`).join('')}
+      ${stagiaires.map((s, i) => `<tr><td>${esc(s.prenom)} ${esc(s.nom)}</td>${nomsFormateurs.map((f, j) => celluleBarre(comptes[i][j], max, '#f06292')).join('')}</tr>`).join('')}
     </table></div>` : '<p class="info">Aucune évaluation enregistrée.</p>';
+  return `<div class="carte"><div class="info">Nombre de passages évalués, par formateur et par stagiaire.</div>${table}</div>`;
+}
 
-  // ---- Nombre de passages par thématique ----
+function _mspVueTheme() {
+  const stagiaires = S.data.stagiaires;
   const themes = S.formation.themes;
-  let maxTheme = 1;
-  const comptesTheme = stagiaires.map(s => themes.map(t =>
+  let max = 1;
+  const comptes = stagiaires.map(s => themes.map(t =>
     S.data.evaluations.filter(e => {
       const p = S.data.passages.find(x => x.id === e.passage_id);
       return e.stagiaire_id === s.id && p && p.theme_id === t.id;
     }).length));
-  comptesTheme.forEach(l => l.forEach(n => { if (n > maxTheme) maxTheme = n; }));
-  const tableThemes = themes.length ? `
-    <div class="table-scroll"><table>
+  comptes.forEach(l => l.forEach(n => { if (n > max) max = n; }));
+  const table = themes.length ? `
+    <div class="table-scroll"><table class="table-compacte">
       <tr><th>Stagiaire</th>${themes.map(t => `<th>${esc(t.libelle)}</th>`).join('')}</tr>
-      ${stagiaires.map((s, i) => `<tr><td>${esc(s.prenom)} ${esc(s.nom)}</td>${themes.map((t, j) => celluleBarre(comptesTheme[i][j], maxTheme, '#81c784')).join('')}</tr>`).join('')}
+      ${stagiaires.map((s, i) => `<tr><td>${esc(s.prenom)} ${esc(s.nom)}</td>${themes.map((t, j) => celluleBarre(comptes[i][j], max, '#81c784')).join('')}</tr>`).join('')}
     </table></div>` : '<p class="info">Aucun thème défini pour cette formation.</p>';
+  return `<div class="carte"><div class="info">Nombre de passages évalués, par thématique et par stagiaire.</div>${table}</div>`;
+}
 
-  // ---- Passages par cas concret / MSP imposée (utile surtout CA1E1E PPBE et SUAP, mais générique) ----
+function _mspVueCas() {
+  const stagiaires = S.data.stagiaires;
   const cas = S.formation.cas || [];
   const norm = t => String(t || '').trim().toLowerCase();
-  const tableCas = cas.length ? `
-    <div class="table-scroll"><table>
+  const table = cas.length ? `
+    <div class="table-scroll"><table class="table-compacte">
       <tr><th>Stagiaire</th>${cas.map(c => `<th>${esc(c.libelle)}</th>`).join('')}</tr>
       ${stagiaires.map(s => `<tr><td>${esc(s.prenom)} ${esc(s.nom)}</td>${cas.map(c => {
         const n = S.data.evaluations.filter(e => {
@@ -1101,36 +1143,38 @@ function ongletSuiviMSP() {
         return `<td>${n}</td>`;
       }).join('')}</tr>`).join('')}
     </table></div>` : '<p class="info">Aucun cas concret défini pour cette formation.</p>';
-
-  $('session-contenu').innerHTML = `
-    <div class="carte">
-      <h2>Suivi par mise en situation (MSP) — vue groupe</h2>
-      <div class="info">Détail compétence par compétence et par passage, pour tous les stagiaires de la session. Réservé à l'encadrement.</div>
-      ${blocsGroupe || '<p class="info">Aucun passage enregistré.</p>'}
-    </div>
-    <div class="carte">
-      <h2>Mots du formateur par MSP</h2>
-      <div class="info">Chaque stagiaire peut aussi consulter cette page, mais uniquement pour ses propres passages, depuis son espace personnel.</div>
-      ${blocsMots || '<p class="info">Aucun commentaire enregistré.</p>'}
-    </div>
-    <div class="carte">
-      <h2>Nombre de passages par formateur</h2>
-      ${tableFormateurs}
-    </div>
-    <div class="carte">
-      <h2>Nombre de passages par thématique</h2>
-      ${tableThemes}
-    </div>
-    <div class="carte">
-      <h2>Passages par cas concret (MSP imposée / MSP type)</h2>
-      <div class="info">Qui est déjà passé sur quel cas concret — surtout utile pour CA1E1E PPBE et Équipier SUAP, mais disponible pour toutes les formations qui ont des cas concrets définis.</div>
-      ${tableCas}
+  return `<div class="carte">
+      <div class="info">Qui est déjà passé sur quel cas concret / MSP imposée — surtout utile pour CA1E1E PPBE et Équipier SUAP, mais disponible dès qu'une formation a des cas concrets définis.</div>
+      ${table}
     </div>`;
 }
 
 // ---------- Onglet Validation (règles RIOFE) ----------
+function classeStatutCompetence(statut) {
+  if (statut === 'Validé') return 'statut-valide';
+  if (statut === 'En cours') return 'statut-eca';
+  if (statut === 'Avis du jury') return 'statut-jury';
+  if (statut === '—') return '';
+  return 'statut-na';
+}
+
 function bilanStagiaire(stagiaireId) {
-  const evals = S.data.evaluations.filter(e => e.stagiaire_id === stagiaireId);
+  let evals = S.data.evaluations.filter(e => e.stagiaire_id === stagiaireId);
+
+  // Paramètres du stage (onglet « Paramètres », réservé RP/GFor) : si un nombre de MSP de
+  // certification est fixé, seules les N dernières MSP évaluées de ce stagiaire comptent.
+  const nbMax = S.session && S.session.nb_msp_certification;
+  if (nbMax) {
+    const mesPassages = S.data.equipiers.filter(e => e.stagiaire_id === stagiaireId && e.evalue)
+      .map(e => S.data.passages.find(p => p.id === e.passage_id)).filter(Boolean)
+      .sort((a, b) => a.numero - b.numero);
+    const retenus = new Set(mesPassages.slice(-nbMax).map(p => p.id));
+    evals = evals.filter(e => retenus.has(e.passage_id));
+  }
+
+  const seuilNA = (S.session && S.session.seuil_na_jury) || 2;
+  const seuilECA = (S.session && S.session.seuil_eca_jury) || 4;
+
   const bilan = {};
   for (const c of S.formation.competences) {
     let acquis = 0, eca = 0, na = 0;
@@ -1140,14 +1184,55 @@ function bilanStagiaire(stagiaireId) {
       else if (n === 'ECA') eca++;
       else if (n === 'NA') na++;
     }
-    // Règle RIOFE : case grisée = « acquise » 2 fois ; case blanche = a minima ECA
+    // Règle RIOFE : case grisée = « acquise » 2 fois ; case blanche = a minima ECA ;
+    // au-delà des seuils NA/ECA réglés dans les Paramètres du stage, la validation relève de l'avis du jury.
     let statut;
-    if (c.grisee) statut = acquis >= 2 ? 'Validé' : (acquis + eca > 0 ? 'En cours' : '—');
-    else statut = acquis > 0 || eca > 0 ? 'Validé' : (na > 0 ? 'Non acquis' : '—');
-    if (na > 0 && statut !== 'Validé') statut = 'Alerte NA';
+    if (na >= seuilNA || eca >= seuilECA) {
+      statut = 'Avis du jury';
+    } else if (c.grisee) {
+      statut = acquis >= 2 ? 'Validé' : (acquis + eca + na > 0 ? 'En cours' : '—');
+    } else {
+      statut = acquis > 0 || eca > 0 ? 'Validé' : (na > 0 ? 'Non acquis' : '—');
+    }
+    if (na === 1 && statut !== 'Validé' && statut !== 'Avis du jury') statut = 'Alerte NA';
     bilan[c.id] = { acquis, eca, na, statut };
   }
   return { bilan, nbPassages: evals.length };
+}
+
+// ---------- Onglet Paramètres du stage (réservé RP/GFor) ----------
+function ongletParametresStage() {
+  if (!(S.vision === 'rp' || S.vision === 'gfor')) {
+    $('session-contenu').innerHTML = '<div class="carte"><p class="info">Réservé au responsable pédagogique et au GFor.</p></div>';
+    return;
+  }
+  const sess = S.session;
+  $('session-contenu').innerHTML = `
+    <div class="carte">
+      <h2>Paramètres du stage</h2>
+      <div class="info">Réglages visibles et modifiables uniquement par le RP et le GFor. Ils s'appliquent immédiatement au calcul de validation (onglets Validation et Suivi MSP).</div>
+      <label>Seuil NA déclenchant un avis du jury (nombre de « NA » sur une même compétence)</label>
+      <input id="pr-seuil-na" type="number" min="1" value="${sess.seuil_na_jury ?? 2}">
+      <label>Seuil ECA déclenchant un avis du jury (nombre de « ECA » sur une même compétence)</label>
+      <input id="pr-seuil-eca" type="number" min="1" value="${sess.seuil_eca_jury ?? 4}">
+      <label>Nombre de MSP prises en compte pour la certification</label>
+      <input id="pr-nb-msp" type="number" min="1" placeholder="Laisser vide = toutes les MSP" value="${sess.nb_msp_certification ?? ''}">
+      <div class="info">Si renseigné (ex. 5) : pour chaque stagiaire, seules ses N dernières MSP évaluées (les plus récentes, par numéro de passage) comptent pour la validation des compétences — même si le stagiaire en a fait davantage.</div>
+      <button class="btn" onclick="enregistrerParametresStage()">Enregistrer</button>
+    </div>`;
+}
+
+async function enregistrerParametresStage() {
+  const seuilNA = Number($('pr-seuil-na').value) || 2;
+  const seuilECA = Number($('pr-seuil-eca').value) || 4;
+  const nbMspRaw = $('pr-nb-msp').value.trim();
+  const nbMsp = nbMspRaw ? Number(nbMspRaw) : null;
+  const { error } = await sb.from('sessions').update({
+    seuil_na_jury: seuilNA, seuil_eca_jury: seuilECA, nb_msp_certification: nbMsp,
+  }).eq('id', S.session.id);
+  if (error) return toast(error.message, false);
+  S.session.seuil_na_jury = seuilNA; S.session.seuil_eca_jury = seuilECA; S.session.nb_msp_certification = nbMsp;
+  toast('Paramètres du stage enregistrés');
 }
 
 function ongletValidation() {
@@ -1156,7 +1241,7 @@ function ongletValidation() {
     const { bilan, nbPassages } = bilanStagiaire(s.id);
     const cellules = comps.map(c => {
       const b = bilan[c.id];
-      const cls = b.statut === 'Validé' ? 'statut-valide' : (b.statut === 'En cours' ? 'statut-eca' : (b.statut === '—' ? '' : 'statut-na'));
+      const cls = classeStatutCompetence(b.statut);
       return `<td class="${cls}" title="acquis:${b.acquis} ECA:${b.eca} NA:${b.na}">${b.statut}<br><small>${b.acquis}A/${b.eca}E/${b.na}N</small></td>`;
     }).join('');
     const okMsp = nbPassages >= S.formation.nb_msp_min;
