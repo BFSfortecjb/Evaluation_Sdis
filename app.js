@@ -79,7 +79,7 @@ function selectCIS(id, valeur) {
 function couleurRole(role) {
   return role === 'rp' ? '#1565c0' : role === 'for_de_for' ? '#6a1b9a' : '#607d8b';
 }
-function libelleRole(role) {
+function libelleRoleQualif(role) {
   return role === 'rp' ? 'RP' : role === 'for_de_for' ? 'For de For' : 'Form.';
 }
 
@@ -87,7 +87,7 @@ function badgeQualif(q, suppr) {
   const auj = new Date().toISOString().slice(0, 10);
   const ok = q.fin_validite >= auj;
   return `<span class="badge" style="background:${couleurRole(q.role)};color:#fff;margin:2px">
-    ${q.domaine} ${libelleRole(q.role)} <span style="opacity:.85">→ ${q.fin_validite}</span>${ok ? '' : ' ⚠'}
+    ${q.domaine} ${libelleRoleQualif(q.role)} <span style="opacity:.85">→ ${q.fin_validite}</span>${ok ? '' : ' ⚠'}
     ${suppr ? `<a onclick="event.stopPropagation();supprQualification(${q.id})" style="cursor:pointer;color:#fff;font-weight:bold"> ✕</a>` : ''}
   </span>`;
 }
@@ -182,6 +182,9 @@ async function ecranGestionFormateurs() {
         <div><label>CIS de rattachement</label>${selectCIS('ap-cis')}</div>
         <div><label>Email (compte utilisateur)</label><input id="ap-email" type="email"></div>
       </div>
+      <label>Mot de passe initial (optionnel)</label>
+      <input id="ap-mdp" type="password" placeholder="6 caractères minimum — laisser vide pour passer par l'email">
+      <div class="info">Si renseigné (avec un email), le compte est créé directement avec ce mot de passe — la personne pourra le changer ensuite dans « Mon profil ». Utile si les emails de confirmation n'arrivent pas (filtres antispam type Mailinblack).</div>
       <label>Qualifications de la personne</label>
       <div class="ligne">
         <div><label>Domaine</label><select id="ap-q-dom">${DOMAINES_COMP.map(d => `<option>${d}</option>`).join('')}</select></div>
@@ -213,7 +216,7 @@ async function ecranGestionFormateurs() {
 function _rendreQualisEnCours() {
   $('ap-q-liste').innerHTML = _qualisEnCours.map((q, i) =>
     `<span class="badge" style="background:${couleurRole(q.role)};color:#fff;margin:2px">
-      ${q.domaine} ${libelleRole(q.role)} → ${q.fin_validite}
+      ${q.domaine} ${libelleRoleQualif(q.role)} → ${q.fin_validite}
       <a onclick="_qualisEnCours.splice(${i},1);ajouterQualifEnCours._maj()" style="cursor:pointer;color:#fff"> ✕</a></span>`).join('');
 }
 function ajouterQualifEnCours() {
@@ -223,7 +226,7 @@ function ajouterQualifEnCours() {
   const role = $('ap-q-role').value;
   // Une même personne peut cumuler plusieurs niveaux (formateur / RP / for de for) dans un même domaine ;
   // seul le doublon exact domaine+rôle est bloqué.
-  if (_qualisEnCours.some(q => q.domaine === dom && q.role === role)) return toast('Ce niveau (' + libelleRole(role) + ') est déjà ajouté pour ce domaine', false);
+  if (_qualisEnCours.some(q => q.domaine === dom && q.role === role)) return toast('Ce niveau (' + libelleRoleQualif(role) + ') est déjà ajouté pour ce domaine', false);
   _qualisEnCours.push({ domaine: dom, role, fin_validite: fin });
   _rendreQualisEnCours();
 }
@@ -233,16 +236,43 @@ async function ajouterAptitude() {
   const nom = $('ap-nom').value.trim(), prenom = $('ap-prenom').value.trim();
   if (!nom || !prenom) return toast('Nom et prénom requis', false);
   if (!_qualisEnCours.length) return toast('Ajouter au moins une qualification (domaine + rôle + validité)', false);
+  const email = $('ap-email').value.trim().toLowerCase() || null;
+  const mdp = $('ap-mdp').value;
   const { data: pers, error } = await sb.from('aptitudes').insert({
     matricule: $('ap-mat').value.trim() || null, grade: $('ap-grade').value,
     statut: $('ap-statut').value, nom, prenom,
     cis: $('ap-cis').value || null,
-    email: $('ap-email').value.trim().toLowerCase() || null,
+    email,
   }).select().single();
   if (error) return toast(error.message, false);
   const { error: e2 } = await sb.from('qualifications').insert(
     _qualisEnCours.map(q => ({ ...q, aptitude_id: pers.id })));
   if (e2) return toast(e2.message, false);
+
+  // Création directe du compte avec mot de passe (utile quand les emails de confirmation
+  // n'arrivent pas — filtre antispam, etc.). Ne fonctionne sans reconnexion manuelle que si
+  // « Confirm email » est désactivé côté Supabase (Authentication > Providers > Email).
+  if (email && mdp) {
+    if (mdp.length < 6) {
+      toast('Personne enregistrée, mais mot de passe ignoré (6 caractères minimum)', false);
+    } else {
+      const { data: inscription, error: e3 } = await sb.auth.signUp({ email, password: mdp });
+      if (e3) {
+        toast('Personne enregistrée, mais compte non créé : ' + e3.message, false);
+      } else if (inscription.session) {
+        // signUp a rendu actif le nouveau compte à la place du tien : on se déconnecte
+        // immédiatement pour ne pas rester connecté à sa place.
+        await sb.auth.signOut();
+        toast('Compte créé avec mot de passe pour ' + prenom + ' ' + nom + ' — reconnecte-toi maintenant.');
+        show('ecran-login');
+        return;
+      } else {
+        toast('Personne enregistrée, compte créé — confirmation par email encore requise avant sa 1ère connexion.');
+        ecranGestionFormateurs();
+        return;
+      }
+    }
+  }
   toast('Personne enregistrée avec ' + _qualisEnCours.length + ' qualification(s)');
   ecranGestionFormateurs();
 }
@@ -728,7 +758,7 @@ async function ongletFormateurs() {
       ${dispo.length ? `
         <select id="fo-apt">${dispo.map(x =>
           `<option value="${x.a.id}" data-fin="${x.q.fin_validite}" data-nom="${esc(x.a.prenom + ' ' + x.a.nom)}">
-            ${esc(x.a.grade || '')} ${esc(x.a.prenom)} ${esc(x.a.nom)} (${esc(x.a.cis || '')}) — ${libelleRole(x.q.role)} ${esc(x.q.domaine)}, valide jusqu'au ${x.q.fin_validite}</option>`).join('')}</select>
+            ${esc(x.a.grade || '')} ${esc(x.a.prenom)} ${esc(x.a.nom)} (${esc(x.a.cis || '')}) — ${libelleRoleQualif(x.q.role)} ${esc(x.q.domaine)}, valide jusqu'au ${x.q.fin_validite}</option>`).join('')}</select>
         <button class="btn" onclick="ajouterFormateur()">Inscrire</button>`
       : `<p class="info">Personne de qualifié${domComp ? ' en ' + esc(domComp) : ''} et disponible dans la liste d'aptitude (menu « Formateurs », vision GFor).</p>`}
     </div>`;
