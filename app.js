@@ -212,7 +212,8 @@ async function ecranGestionFormateurs() {
       </div>
 
       <h3>Import Excel</h3>
-      <p class="info">Une ligne par qualification (une même personne peut donc avoir plusieurs lignes). Colonnes : Matricule, Nom, Prénom, Grade, Statut, CIS, Email, Domaine, Rôle, Fin de validité.</p>
+      <p class="info">Une ligne par qualification (une même personne peut donc avoir plusieurs lignes). Colonnes : Matricule, Nom, Prénom, Grade, Statut, CIS, Email, Domaine, Rôle, Fin de validité, Mot de passe, GFor.
+        Les deux dernières colonnes sont optionnelles : renseigne « Mot de passe » (6 caractères minimum, sur une seule ligne par personne suffit) pour créer directement son compte de connexion, et « GFor » = oui pour lui donner l'accès complet.</p>
       <button class="btn secondaire" onclick="telechargerModeleAptitude()">📄 Télécharger le modèle</button>
       <label style="margin-top:10px">Fichier à importer (.xlsx)</label>
       <input type="file" accept=".xlsx,.xls,.csv" onchange="importerAptitudes(this)">`
@@ -490,6 +491,9 @@ function importerAptitudes(input) {
             (norm(l[k]).includes('for de for') || norm(l[k]).includes('fdf')) ? 'for_de_for'
             : (norm(l[k]).includes('rp') || norm(l[k]).includes('respon')) ? 'rp' : 'formateur';
           else if (c.includes('valid') || c.includes('fin')) o.fin_validite = versDateISO(l[k]);
+          else if (c.startsWith('mdp') || c.includes('motdepasse') || c.startsWith('password'))
+            o.mdp = String(l[k] ?? '').trim();
+          else if (c.startsWith('gfor')) o.gfor = /^(oui|yes|true|1|x)$/i.test(String(l[k] ?? '').trim());
         }
         if (o.nom && o.prenom) brutes.push(o);
       }
@@ -504,16 +508,24 @@ function importerAptitudes(input) {
       const groupes = {};
       for (const o of brutes) (groupes[cle(o)] = groupes[cle(o)] || []).push(o);
 
-      let nbP = 0, nbQ = 0;
+      // Compte GFor courant, pour pouvoir restaurer sa session entre deux créations de compte
+      // (sb.auth.signUp() active automatiquement la session du compte qu'il vient de créer).
+      const { data: { session: sessionGFor } } = await sb.auth.getSession();
+
+      let nbP = 0, nbQ = 0, nbComptes = 0, nbComptesEchec = 0;
       for (const g of Object.values(groupes)) {
         const o = g[0];
         let pers = trouve(o);
         if (!pers) {
           const ins = await sb.from('aptitudes').insert({
             matricule: o.matricule || null, nom: o.nom, prenom: o.prenom, grade: o.grade || null,
-            statut: o.statut || null, cis: o.cis || null, email: o.email || null }).select().single();
+            statut: o.statut || null, cis: o.cis || null, email: o.email || null, gfor: o.gfor || false }).select().single();
           if (ins.error) return toast(ins.error.message, false);
           pers = ins.data; nbP++;
+        } else if (o.email && !pers.email) {
+          // Complète l'email s'il manquait — nécessaire pour pouvoir créer le compte juste après.
+          const upd = await sb.from('aptitudes').update({ email: o.email }).eq('id', pers.id).select().single();
+          if (!upd.error) pers = upd.data;
         }
         const qualis = g.filter(x => x.domaine && x.fin_validite)
           .map(x => ({ aptitude_id: pers.id, domaine: x.domaine, role: x.role || 'formateur', fin_validite: x.fin_validite }));
@@ -522,8 +534,27 @@ function importerAptitudes(input) {
           if (eq) return toast(eq.message, false);
           nbQ += qualis.length;
         }
+
+        // Création du compte de connexion si un mot de passe est renseigné dans le fichier
+        if (o.mdp && pers.email) {
+          if (o.mdp.length < 6) {
+            nbComptesEchec++;
+          } else {
+            const { error: eSignup } = await sb.auth.signUp({ email: pers.email, password: o.mdp });
+            if (eSignup) {
+              nbComptesEchec++;
+            } else {
+              nbComptes++;
+              // Restaure immédiatement la session du GFor avant de traiter la personne suivante.
+              if (sessionGFor) await sb.auth.setSession({ access_token: sessionGFor.access_token, refresh_token: sessionGFor.refresh_token });
+            }
+          }
+        }
       }
-      toast(nbP + ' personne(s) créée(s), ' + nbQ + ' qualification(s) importée(s)');
+      let msg = nbP + ' personne(s) créée(s), ' + nbQ + ' qualification(s) importée(s)';
+      if (nbComptes) msg += ', ' + nbComptes + ' compte(s) de connexion créé(s)';
+      if (nbComptesEchec) msg += ' (' + nbComptesEchec + ' compte(s) non créé(s) — email déjà utilisé ou mot de passe trop court)';
+      toast(msg);
       ecranGestionFormateurs();
     } catch (err) { toast('Fichier illisible : ' + err.message, false); }
   };
@@ -532,11 +563,11 @@ function importerAptitudes(input) {
 
 function telechargerModeleAptitude() {
   const ws = XLSX.utils.aoa_to_sheet([
-    ['Matricule', 'Nom', 'Prénom', 'Grade', 'Statut', 'CIS', 'Email', 'Domaine', 'Rôle', 'Fin de validité'],
-    ['V0912345', 'GUEGAN', 'Pauline', 'ADC', 'SPV', 'CIS BANNALEC', 'p.guegan@sdis29.fr', 'INCENDIE', 'RP', '31/12/2027'],
-    ['V0912345', 'GUEGAN', 'Pauline', 'ADC', 'SPV', 'CIS BANNALEC', 'p.guegan@sdis29.fr', 'PPBE', 'RP', '31/12/2027'],
-    ['V0912345', 'GUEGAN', 'Pauline', 'ADC', 'SPV', 'CIS BANNALEC', 'p.guegan@sdis29.fr', 'SSUAP', 'Formateur', '30/06/2027'],
-    ['V0954321', 'SINIC', 'Chloé', 'CCH', 'SPP', 'CIS QUIMPERLE', 'c.sinic@sdis29.fr', 'SSUAP', 'Formateur', '30/06/2027'],
+    ['Matricule', 'Nom', 'Prénom', 'Grade', 'Statut', 'CIS', 'Email', 'Domaine', 'Rôle', 'Fin de validité', 'Mot de passe', 'GFor'],
+    ['V0912345', 'GUEGAN', 'Pauline', 'ADC', 'SPV', 'CIS BANNALEC', 'p.guegan@sdis29.fr', 'INCENDIE', 'RP', '31/12/2027', 'motdepasse1', 'non'],
+    ['V0912345', 'GUEGAN', 'Pauline', 'ADC', 'SPV', 'CIS BANNALEC', 'p.guegan@sdis29.fr', 'PPBE', 'RP', '31/12/2027', '', ''],
+    ['V0912345', 'GUEGAN', 'Pauline', 'ADC', 'SPV', 'CIS BANNALEC', 'p.guegan@sdis29.fr', 'SSUAP', 'Formateur', '30/06/2027', '', ''],
+    ['V0954321', 'SINIC', 'Chloé', 'CCH', 'SPP', 'CIS QUIMPERLE', 'c.sinic@sdis29.fr', 'SSUAP', 'Formateur', '30/06/2027', 'autremdp2', 'non'],
   ]);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Aptitudes');
