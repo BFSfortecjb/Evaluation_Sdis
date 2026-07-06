@@ -1066,7 +1066,7 @@ function _mspVueCompetences() {
     const dec = s.decision_jury === 'valide' ? '<span class="statut-valide">✅ Validé</span>'
       : (s.decision_jury === 'non_valide' ? '<span class="statut-na">❌ Non validé</span>' : '<span class="info">— à décider —</span>');
     return `<h3>${esc(s.prenom)} ${esc(s.nom)}</h3>
-      <div class="table-scroll"><table class="table-compacte">
+      <div class="table-scroll"><table class="table-compacte table-msp-comp">
         <tr><th>Comp.</th>${mesPassages.map(p => `<th>${p.numero}</th>`).join('')}<th>Validation</th></tr>
         ${lignesComp}
       </table></div>
