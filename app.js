@@ -827,26 +827,103 @@ async function supprPassage(id) {
 }
 
 // ---------- Onglet Évaluations (saisie formateur) ----------
+// Vue « tableau de bord du formateur » : ses propres passages + ceux à affecter en priorité,
+// les MSP non entièrement évaluées remontent en haut de la liste.
 function ongletEvaluations() {
   const nomStag = id => { const s = S.data.stagiaires.find(x => x.id === id); return s ? s.prenom + ' ' + s.nom : '?'; };
-  const blocs = S.data.passages.map(p => {
+  const toutEvalue = p => {
+    const eq = S.data.equipiers.filter(e => e.passage_id === p.id && e.evalue);
+    return eq.length > 0 && eq.every(e => S.data.evaluations.some(ev => ev.passage_id === p.id && ev.stagiaire_id === e.stagiaire_id));
+  };
+
+  let passages = S.data.passages.filter(p => S.data.equipiers.some(e => e.passage_id === p.id && e.evalue));
+
+  // Vision formateur : n'afficher que ses propres passages + ceux encore à affecter,
+  // pour ne pas polluer sa lecture avec les passages des collègues.
+  if (S.vision === 'formateur' && S.user) {
+    passages = passages.filter(p => !p.evaluateur || p.evaluateur === S.user.nom);
+  }
+
+  // Priorité aux MSP non entièrement évaluées, puis par numéro
+  passages = passages.slice().sort((a, b) => {
+    const da = toutEvalue(a) ? 1 : 0, db = toutEvalue(b) ? 1 : 0;
+    return da !== db ? da - db : a.numero - b.numero;
+  });
+
+  const blocs = passages.map(p => {
     const theme = S.formation.themes.find(t => t.id === p.theme_id);
     const eq = S.data.equipiers.filter(e => e.passage_id === p.id && e.evalue);
-    if (!eq.length) return '';
-    return `<div class="carte">
-      <h3>Passage n°${p.numero} · ${esc(p.jour)} · ${esc(theme ? theme.libelle : '')} ${p.sujet ? '· ' + esc(p.sujet) : ''}</h3>
+    const complet = toutEvalue(p);
+    return `<div class="carte" style="${complet ? 'opacity:.7' : ''}">
+      <h3>Passage n°${p.numero} · ${esc(p.jour)} · ${esc(theme ? theme.libelle : '')} ${p.sujet ? '· ' + esc(p.sujet) : ''}
+        ${complet ? '<span class="niv niv-A">complet ✓</span>' : '<span class="niv niv-NE">à évaluer</span>'}</h3>
       <div class="info">Évaluateur : ${p.evaluateur
         ? esc(p.evaluateur) + (S.user && p.evaluateur === S.user.nom ? ' (vous)' : '')
         : `<span class="statut-eca">à affecter</span> <button class="btn petit" onclick="prendrePassage(${p.id})">🙋 Je prends ce passage</button>`}</div>
-      ${eq.map(e => {
-        const fait = S.data.evaluations.find(ev => ev.passage_id === p.id && ev.stagiaire_id === e.stagiaire_id);
-        return `<button class="btn-liste" onclick="formEvaluation(${p.id}, ${e.stagiaire_id})">
-          ${esc(nomStag(e.stagiaire_id))} ${fait ? '<span class="niv niv-A">évalué ✓</span>' : '<span class="niv niv-NE">à évaluer</span>'}
-        </button>`;
-      }).join('')}
+      <div class="info">${eq.map(e => {
+        const fait = S.data.evaluations.some(ev => ev.passage_id === p.id && ev.stagiaire_id === e.stagiaire_id);
+        return esc(nomStag(e.stagiaire_id)) + (fait ? ' ✓' : ' ○');
+      }).join(' · ')}</div>
+      <button class="btn" onclick="formEvaluationPassage(${p.id})">Évaluer l'équipe (${eq.length})</button>
     </div>`;
   }).join('');
-  $('session-contenu').innerHTML = blocs || '<div class="carte"><p class="info">Aucun passage programmé — voir l\'onglet Feuille de garde.</p></div>';
+  $('session-contenu').innerHTML = `
+    <div class="carte">
+      <button class="btn" onclick="formNouvelleMSP()">➕ Nouvelle MSP à évaluer</button>
+    </div>
+    ${blocs || '<div class="carte"><p class="info">Aucun passage programmé pour le moment.</p></div>'}`;
+}
+
+// Création rapide d'une MSP directement depuis l'onglet Évaluations : numéro de passage
+// attribué automatiquement, évaluateur = soi-même, puis bascule directement sur la saisie.
+function formNouvelleMSP() {
+  $('session-contenu').innerHTML = `
+    <div class="carte">
+      <span class="lien-retour" onclick="ongletEvaluations()">← Retour</span>
+      <h2>Nouvelle MSP à évaluer</h2>
+      <div class="info">Le numéro de passage est attribué automatiquement.${S.user ? ' Évaluateur : ' + esc(S.user.nom) + '.' : ''}</div>
+      <div class="ligne">
+        <div><label>Jour</label><select id="pa2-jour">${JOURS.map(j => `<option>${j}</option>`).join('')}</select></div>
+        <div><label>Thème</label><select id="pa2-theme">${S.formation.themes.map(t => `<option value="${t.id}">${esc(t.libelle)}</option>`).join('')}</select></div>
+      </div>
+      <label>Sujet / cas concret</label>
+      <input id="pa2-sujet" list="liste-cas2" placeholder="libre ou choisir">
+      <datalist id="liste-cas2">${S.formation.cas.map(c => `<option value="${esc(c.libelle)}">`).join('')}</datalist>
+      <label>Équipiers du passage</label>
+      ${S.data.stagiaires.map(s => `
+        <div class="bloc-comp">
+          <input type="checkbox" id="pa2-eq-${s.id}" style="width:auto"> ${esc(s.prenom)} ${esc(s.nom)}
+        </div>`).join('')}
+      <button class="btn" onclick="creerMSPRapide()">Créer et évaluer</button>
+    </div>`;
+}
+
+async function creerMSPRapide() {
+  const equipiers = S.data.stagiaires.filter(s => $('pa2-eq-' + s.id).checked);
+  if (!equipiers.length) return toast('Sélectionner au moins un équipier', false);
+  // Numéro unique : max en base + contrainte unique (session_id, numero), réessai si collision
+  const { data: dernier } = await sb.from('passages').select('numero')
+    .eq('session_id', S.session.id).order('numero', { ascending: false }).limit(1);
+  let numero = ((dernier && dernier[0]) ? dernier[0].numero : 0) + 1;
+  let passage = null, error = null;
+  for (let essai = 0; essai < 3; essai++) {
+    ({ data: passage, error } = await sb.from('passages').insert({
+      session_id: S.session.id, numero,
+      jour: $('pa2-jour').value, theme_id: Number($('pa2-theme').value),
+      sujet: $('pa2-sujet').value.trim() || null,
+      evaluateur: S.user ? S.user.nom : null,
+    }).select().single());
+    if (!error) break;
+    if (error.code === '23505') { numero++; continue; }
+    break;
+  }
+  if (error) return toast(error.message, false);
+  const { error: e2 } = await sb.from('passage_equipiers').insert(
+    equipiers.map(s => ({ passage_id: passage.id, stagiaire_id: s.id, evalue: true })));
+  if (e2) return toast(e2.message, false);
+  await chargerDonneesSession(S.session.id);
+  toast('Passage n°' + numero + ' créé');
+  formEvaluationPassage(passage.id);
 }
 
 async function prendrePassage(passageId) {
@@ -859,61 +936,78 @@ async function prendrePassage(passageId) {
   ongletEvaluations();
 }
 
-let _evalCourante = null; // {passageId, stagiaireId, notes:{}}
+// ---------- Évaluation de toute l'équipe d'un passage sur une seule page (pensé mobile) ----------
+// Une colonne par équipier (avatar + nom), une ligne par compétence avec un menu déroulant,
+// puis APP à proposer / commentaire par équipier en bas de page.
+let _evalPassageCourante = null; // {passageId, parStagiaire: {stagId: {notes:{}, app1, commentaire}}}
 
-function formEvaluation(passageId, stagiaireId) {
+function initiales(s) {
+  return (((s.prenom || '?')[0] || '?') + ((s.nom || '?')[0] || '?')).toUpperCase();
+}
+
+function formEvaluationPassage(passageId) {
   const p = S.data.passages.find(x => x.id === passageId);
-  const s = S.data.stagiaires.find(x => x.id === stagiaireId);
-  const existante = S.data.evaluations.find(ev => ev.passage_id === passageId && ev.stagiaire_id === stagiaireId);
-  _evalCourante = { passageId, stagiaireId, notes: existante ? { ...existante.notes } : {} };
+  const eq = S.data.equipiers.filter(e => e.passage_id === passageId && e.evalue);
+  const stags = eq.map(e => S.data.stagiaires.find(s => s.id === e.stagiaire_id)).filter(Boolean);
+  if (!stags.length) return toast('Aucun équipier sur ce passage', false);
+
+  _evalPassageCourante = { passageId, parStagiaire: {} };
+  let ressentiExistant = null;
+  for (const s of stags) {
+    const existante = S.data.evaluations.find(ev => ev.passage_id === passageId && ev.stagiaire_id === s.id);
+    _evalPassageCourante.parStagiaire[s.id] = {
+      notes: existante ? { ...existante.notes } : {},
+      app1: existante?.app1 || '', commentaire: existante?.commentaire || '',
+    };
+    if (existante && existante.ressenti_formateur != null) ressentiExistant = existante.ressenti_formateur;
+  }
+
+  const theme = S.formation.themes.find(t => t.id === p.theme_id);
+  const colonneStag = s => `<div class="colonne-stag">
+      <div class="avatar-stag">${esc(initiales(s))}</div>
+      <div class="nom-stag">${esc(s.prenom)}<br>${esc(s.nom)}</div>
+    </div>`;
 
   $('session-contenu').innerHTML = `
     <div class="carte">
       <span class="lien-retour" onclick="ongletEvaluations()">← Retour aux passages</span>
-      <h2>Évaluation — ${esc(s.prenom)} ${esc(s.nom)}</h2>
-      <div class="info">Passage n°${p.numero} · ${esc(p.jour)} · A+ acquis avec analyse / A acquis / ECA en cours / NA non acquis / NE non évalué</div>
+      <h2>Passage n°${p.numero} · ${esc(p.jour)} · ${esc(theme ? theme.libelle : '')}</h2>
+      <div class="info">A+ acquis avec analyse / A acquis / ECA en cours / NA non acquis / NE non évalué. Note : pas encore de photo stagiaire dans l'appli — initiales en attendant.</div>
+      <div class="grille-eval-equipe">${stags.map(colonneStag).join('')}</div>
       ${S.formation.competences.map(c => `
-        <div class="bloc-comp">
-          <div class="libelle"><span class="code">${esc(c.code)}</span> — ${esc(c.libelle)}</div>
-          <div class="choix-niv" id="niv-${c.id}">
-            ${NIVEAUX.map(n => `<button onclick="choisirNiveau(${c.id}, '${n}')"
-              class="${_evalCourante.notes[c.id] === n ? 'sel-' + NIV_CLASSE[n] : ''}">${n}</button>`).join('')}
-          </div>
+        <div class="section-titre" style="margin-top:16px">${esc(c.code)} — ${esc(c.libelle)}</div>
+        <div class="grille-eval-equipe">
+          ${stags.map(s => `<div class="colonne-stag">
+            <select onchange="_evalPassageCourante.parStagiaire[${s.id}].notes[${c.id}] = this.value || undefined">
+              <option value="">—</option>
+              ${NIVEAUX.map(n => `<option value="${n}" ${_evalPassageCourante.parStagiaire[s.id].notes[c.id] === n ? 'selected' : ''}>${n}</option>`).join('')}
+            </select>
+          </div>`).join('')}
         </div>`).join('')}
-      <div class="ligne">
-        <div><label>Ressenti formateur (0 à 5)</label>
-          <select id="ev-ressenti">${[0,1,2,3,4,5].map(n => `<option ${existante && existante.ressenti_formateur === n ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+      <div class="section-titre" style="margin-top:16px">APP à proposer / Commentaire</div>
+      <div class="grille-eval-equipe">
+        ${stags.map(s => `<div class="colonne-stag">
+          <textarea placeholder="APP à proposer" oninput="_evalPassageCourante.parStagiaire[${s.id}].app1 = this.value">${esc(_evalPassageCourante.parStagiaire[s.id].app1)}</textarea>
+          <textarea placeholder="Commentaire" oninput="_evalPassageCourante.parStagiaire[${s.id}].commentaire = this.value">${esc(_evalPassageCourante.parStagiaire[s.id].commentaire)}</textarea>
+        </div>`).join('')}
       </div>
-      <label>APP à proposer 1</label><input id="ev-app1" value="${esc(existante?.app1 || '')}">
-      <label>APP à proposer 2</label><input id="ev-app2" value="${esc(existante?.app2 || '')}">
-      <label>APP à proposer 3</label><input id="ev-app3" value="${esc(existante?.app3 || '')}">
-      <label>Commentaire</label><textarea id="ev-comm">${esc(existante?.commentaire || '')}</textarea>
-      <button class="btn" onclick="enregistrerEvaluation()">Enregistrer l'évaluation</button>
+      <label>Ressenti formateur (0 à 5, pour toute l'équipe de ce passage)</label>
+      <select id="ev-ressenti-equipe">${[0, 1, 2, 3, 4, 5].map(n => `<option ${ressentiExistant === n ? 'selected' : ''}>${n}</option>`).join('')}</select>
+      <button class="btn" onclick="enregistrerEvaluationPassage()">Enregistrer l'évaluation de l'équipe</button>
     </div>`;
 }
 
-function choisirNiveau(compId, niveau) {
-  _evalCourante.notes[compId] = niveau;
-  const bloc = $('niv-' + compId);
-  bloc.querySelectorAll('button').forEach(b => b.className = '');
-  const idx = NIVEAUX.indexOf(niveau);
-  bloc.querySelectorAll('button')[idx].className = 'sel-' + NIV_CLASSE[niveau];
-}
-
-async function enregistrerEvaluation() {
-  const manquantes = S.formation.competences.filter(c => !_evalCourante.notes[c.id]);
-  if (manquantes.length) return toast('Compétences non renseignées : ' + manquantes.map(c => c.code).join(', ') + ' (utiliser NE si non évaluée)', false);
-  const { error } = await sb.from('evaluations').upsert({
-    passage_id: _evalCourante.passageId, stagiaire_id: _evalCourante.stagiaireId,
-    formateur: S.user ? S.user.nom : null,
-    notes: _evalCourante.notes,
-    ressenti_formateur: Number($('ev-ressenti').value),
-    app1: $('ev-app1').value.trim() || null, app2: $('ev-app2').value.trim() || null,
-    app3: $('ev-app3').value.trim() || null, commentaire: $('ev-comm').value.trim() || null,
-  }, { onConflict: 'passage_id,stagiaire_id' });
+async function enregistrerEvaluationPassage() {
+  const ressenti = Number($('ev-ressenti-equipe').value);
+  const lignes = Object.entries(_evalPassageCourante.parStagiaire).map(([stagiaireId, d]) => ({
+    passage_id: _evalPassageCourante.passageId, stagiaire_id: Number(stagiaireId),
+    formateur: S.user ? S.user.nom : null, notes: d.notes, ressenti_formateur: ressenti,
+    app1: (d.app1 || '').trim() || null, commentaire: (d.commentaire || '').trim() || null,
+  }));
+  const { error } = await sb.from('evaluations').upsert(lignes, { onConflict: 'passage_id,stagiaire_id' });
   if (error) return toast(error.message, false);
   await chargerDonneesSession(S.session.id);
-  toast('Évaluation enregistrée'); ongletEvaluations();
+  toast('Évaluation enregistrée pour toute l\'équipe'); ongletEvaluations();
 }
 
 // ---------- Onglet Suivi MSP (livrable 4 : suivi compétence groupe) ----------

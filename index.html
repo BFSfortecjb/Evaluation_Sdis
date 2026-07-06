@@ -109,6 +109,15 @@
 
   .badge { display: inline-block; background: #e4e4e8; border-radius: 12px; padding: 3px 10px; font-size: 12px; margin-left: 6px; }
   .info { font-size: 13px; color: #666; margin-top: 6px; }
+
+  /* Évaluation d'équipe (une colonne par équipier, pensé mobile) */
+  .grille-eval-equipe { display: grid; grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); gap: 8px; margin-bottom: 6px; }
+  .colonne-stag { text-align: center; }
+  .avatar-stag { width: 42px; height: 42px; border-radius: 50%; background: var(--rouge); color: #fff;
+    display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px; margin: 0 auto 4px; }
+  .nom-stag { font-size: 12px; font-weight: 600; line-height: 1.2; margin-bottom: 6px; }
+  .colonne-stag select { font-size: 13px; padding: 6px 4px; }
+  .colonne-stag textarea { font-size: 12px; padding: 6px; min-height: 44px; margin-bottom: 4px; }
 </style>
 </head>
 <body>
