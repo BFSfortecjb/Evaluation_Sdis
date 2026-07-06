@@ -85,6 +85,7 @@
   .statut-valide { color: var(--ok); font-weight: 700; }
   .statut-eca { color: var(--warn); font-weight: 700; }
   .statut-na { color: var(--ko); font-weight: 700; }
+  .statut-jury { color: #6a1b9a; font-weight: 700; }
 
   /* Boutons d'évaluation A+/A/ECA/NA/NE */
   .choix-niv { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
@@ -118,6 +119,13 @@
   .nom-stag { font-size: 12px; font-weight: 600; line-height: 1.2; margin-bottom: 6px; }
   .colonne-stag select { font-size: 13px; padding: 6px 4px; }
   .colonne-stag textarea { font-size: 12px; padding: 6px; min-height: 44px; margin-bottom: 4px; }
+
+  /* Tableaux denses (Suivi MSP : beaucoup de colonnes) */
+  .table-compacte { font-size: 10px; }
+  .table-compacte th, .table-compacte td { padding: 1px 3px; font-size: 10px; line-height: 1.2; white-space: nowrap; text-align: center; }
+  .table-compacte th:first-child, .table-compacte td:first-child { text-align: left; }
+  .table-compacte .niv { padding: 1px 4px; font-size: 10px; border-radius: 4px; }
+  .table-compacte .code { font-size: 10px; }
 </style>
 </head>
 <body>
