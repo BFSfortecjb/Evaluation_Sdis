@@ -150,7 +150,7 @@ async function ecranGestionFormateurs() {
 
   const lignes = (apt || []).map(a => `<tr>
       <td>${esc(a.matricule || '')}</td><td>${esc(a.grade || '')}</td>
-      <td><b>${esc(a.nom)}</b> ${esc(a.prenom)}</td>
+      <td><b>${esc(a.nom)}</b> ${esc(a.prenom)}${a.gfor ? ' <span class="badge" style="background:#6a1b9a;color:#fff">GFOR</span>' : ''}</td>
       <td>${esc(a.statut || '')}</td><td>${esc(a.cis || '')}</td>
       <td>${esc(a.email || '')}</td>
       <td>${(a.qualifications || []).map(q => badgeQualif(q, estGfor)).join(' ') || '<span class="info">aucune</span>'}</td>
@@ -185,6 +185,7 @@ async function ecranGestionFormateurs() {
       <label>Mot de passe initial (optionnel)</label>
       <input id="ap-mdp" type="password" placeholder="6 caractères minimum — laisser vide pour passer par l'email">
       <div class="info">Si renseigné (avec un email), le compte est créé directement avec ce mot de passe — la personne pourra le changer ensuite dans « Mon profil ». Utile si les emails de confirmation n'arrivent pas (filtres antispam type Mailinblack).</div>
+      <label><input type="checkbox" id="ap-gfor" style="width:auto"> Donner l'accès GFor (gestion complète : sessions, formateurs, liste d'aptitude...)</label>
       <label>Qualifications de la personne</label>
       <div class="ligne">
         <div><label>Domaine</label><select id="ap-q-dom">${DOMAINES_COMP.map(d => `<option>${d}</option>`).join('')}</select></div>
@@ -238,11 +239,12 @@ async function ajouterAptitude() {
   if (!_qualisEnCours.length) return toast('Ajouter au moins une qualification (domaine + rôle + validité)', false);
   const email = $('ap-email').value.trim().toLowerCase() || null;
   const mdp = $('ap-mdp').value;
+  const gfor = $('ap-gfor').checked;
   const { data: pers, error } = await sb.from('aptitudes').insert({
     matricule: $('ap-mat').value.trim() || null, grade: $('ap-grade').value,
     statut: $('ap-statut').value, nom, prenom,
     cis: $('ap-cis').value || null,
-    email,
+    email, gfor,
   }).select().single();
   if (error) return toast(error.message, false);
   const { error: e2 } = await sb.from('qualifications').insert(
@@ -327,6 +329,7 @@ function ecranModifierAptitude(id) {
       <div><label>CIS de rattachement</label>${selectCIS('ma-cis', a.cis || '')}</div>
     </div>
     <label>Email (compte utilisateur)</label><input id="ma-email" type="email" value="${esc(a.email || '')}">
+    <label><input type="checkbox" id="ma-gfor" style="width:auto" ${a.gfor ? 'checked' : ''}> Donner l'accès GFor (gestion complète : sessions, formateurs, liste d'aptitude...)</label>
     <button class="btn" onclick="enregistrerModifAptitude(${a.id})">Enregistrer les corrections</button>
 
     <h3>Compte de connexion</h3>
@@ -360,13 +363,26 @@ async function creerCompteAptitudeExistante(id) {
 async function enregistrerModifAptitude(id) {
   const nom = $('ma-nom').value.trim(), prenom = $('ma-prenom').value.trim();
   if (!nom || !prenom) return toast('Nom et prénom requis', false);
-  const { error } = await sb.from('aptitudes').update({
+  const email = $('ma-email').value.trim().toLowerCase() || null;
+  const gfor = $('ma-gfor').checked;
+  const { data: apt, error } = await sb.from('aptitudes').update({
     matricule: $('ma-mat').value.trim() || null, grade: $('ma-grade').value,
     nom, prenom, statut: $('ma-statut').value || null, cis: $('ma-cis').value || null,
-    email: $('ma-email').value.trim().toLowerCase() || null,
-  }).eq('id', id);
+    email, gfor,
+  }).eq('id', id).select('*, qualifications(*)').single();
   if (error) return toast(error.message, false);
+  if (apt) await synchroniserRoleProfil(apt);
   toast('Informations corrigées'); ecranGestionFormateurs();
+}
+
+// Garde le rôle du profil (droits d'accès) synchronisé avec la liste d'aptitude,
+// pour le cas où le compte de connexion existait déjà avant une modification
+// (ex : on coche l'accès GFor sur une personne qui a déjà un compte).
+async function synchroniserRoleProfil(aptitude) {
+  if (!aptitude.email) return;
+  const nouveauRole = aptitude.gfor ? 'gfor' : ((aptitude.qualifications || []).some(q => q.role === 'rp') ? 'rp' : 'formateur');
+  const { error } = await sb.from('profils').update({ role: nouveauRole }).eq('email', aptitude.email);
+  if (error) console.warn('Synchronisation profil impossible :', error.message);
 }
 
 // ---------- Mon profil (accessible en cliquant sur son identité dans le bandeau) ----------
@@ -527,15 +543,27 @@ async function ecranAccueilStaff() {
   const [sess, stag, forms, formt] = await Promise.all([
     sb.from('sessions').select('*, formations(*)').order('date_debut', { ascending: true, nullsFirst: false }),
     sb.from('stagiaires').select('id, session_id'),
-    sb.from('session_formateurs').select('id, session_id'),
+    sb.from('session_formateurs').select('id, session_id, nom'),
     sb.from('formations').select('*').eq('actif', true),
   ]);
   if (sess.error) return toast(sess.error.message, false);
-  const sessions = sess.data;
+  let sessions = sess.data;
   for (const s of sessions) {
     s._nbStag = (stag.data || []).filter(x => x.session_id === s.id).length;
     s._nbForm = (forms.data || []).filter(x => x.session_id === s.id).length;
   }
+
+  // Vision RP / Formateur : ne montrer que ses propres sessions actives ou en préparation
+  // (déclaré RP, ou inscrit comme formateur) — les sessions terminées restent visibles de tous.
+  // « Vue globale » (GFor uniquement) permet de désactiver ce filtre pour voir/tester comme si
+  // on était omniscient, sans avoir besoin d'un second compte.
+  sessions = sessions.filter(s => {
+    if (s.statut === 'terminee') return true;
+    if (S.omniscient) return true;
+    if (S.vision === 'rp') return !!(S.user && s.responsable === S.user.nom);
+    if (S.vision === 'formateur') return !!(S.user && (forms.data || []).some(f => f.session_id === s.id && f.nom === S.user.nom));
+    return true;
+  });
 
   // Classement par dates réelles : en cours / en préparation (à venir) / terminées
   const auj = new Date().toISOString().slice(0, 10);

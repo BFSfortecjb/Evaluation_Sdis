@@ -141,6 +141,9 @@
   <h1>🚒 Évaluation Stagiaires</h1>
   <span class="user" id="bandeau-user" onclick="ecranMonProfil()" style="cursor:pointer" title="Mon profil"></span>
   <select id="sel-vision" style="display:none" onchange="changerVision(this.value)"></select>
+  <label id="lbl-omniscient" style="display:none;color:#fff;font-size:12px;white-space:nowrap">
+    <input type="checkbox" id="chk-omniscient" checked style="width:auto" onchange="toggleOmniscient(this.checked)"> Vue globale
+  </label>
   <button id="btn-logout" style="display:none" onclick="logout()">Déconnexion</button>
 </header>
 

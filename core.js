@@ -69,9 +69,11 @@ async function chargerProfil() {
     if (apt && apt.length) {
       const a = apt[0];
       const estRP = (a.qualifications || []).some(q => q.role === 'rp');
+      // a.gfor (case à cocher dans la liste d'aptitude) permet de donner l'accès GFor
+      // sans passer par la base — sinon rôle déduit des qualifications (RP > Formateur).
       const ins = await sb.from('profils').insert({
-        id: user.id, nom: a.prenom + ' ' + a.nom,
-        role: estRP ? 'rp' : 'formateur', cis: a.cis,
+        id: user.id, nom: a.prenom + ' ' + a.nom, email: user.email,
+        role: a.gfor ? 'gfor' : (estRP ? 'rp' : 'formateur'), cis: a.cis,
       }).select().single();
       if (ins.error) debugShow('Création de profil impossible : ' + JSON.stringify(ins.error));
       profil = ins.data;
@@ -85,6 +87,7 @@ async function chargerProfil() {
   }
   S.user = profil;
   S.vision = profil.role;
+  S.omniscient = true; // par défaut : le GFor voit tout, même pendant le développement/tests
   $('bandeau-user').textContent = profil.nom;
   $('btn-logout').style.display = '';
   // Un rôle donne accès à sa vision et à celles en dessous
@@ -98,7 +101,16 @@ async function chargerProfil() {
   const sel = $('sel-vision');
   sel.innerHTML = visions.map(r => '<option value="' + r + '">Vision : ' + libelleRole(r) + '</option>').join('');
   sel.style.display = visions.length > 1 ? '' : 'none';
+  // « Vue globale » : réservé au GFor, permet de basculer entre voir toutes les sessions (dev/tests)
+  // et ne voir que celles où l'on est réellement déclaré RP/Formateur (pour tester en conditions réelles).
+  $('lbl-omniscient').style.display = profil.role === 'gfor' ? '' : 'none';
+  $('chk-omniscient').checked = true;
   ecranAccueilStaff(); // défini dans app.js
+}
+
+function toggleOmniscient(v) {
+  S.omniscient = v;
+  ecranAccueilStaff();
 }
 
 function libelleRole(r) {
@@ -111,6 +123,7 @@ async function logout() {
   $('bandeau-user').textContent = '';
   $('btn-logout').style.display = 'none';
   $('sel-vision').style.display = 'none';
+  $('lbl-omniscient').style.display = 'none';
   $('menu-gauche').style.display = 'none';
   show('ecran-login');
 }
