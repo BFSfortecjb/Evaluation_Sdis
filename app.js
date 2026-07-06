@@ -1014,6 +1014,13 @@ async function enregistrerEvaluationPassage() {
 // Page 1 (groupe) : consultable par tout l'encadrement (jamais par les stagiaires, cet onglet
 // n'existe pas côté vision stagiaire). Page 2 (mots du formateur) : dupliquée côté stagiaire
 // (voir ecranAccueilStagiaire) mais filtrée sur ses seuls passages.
+// Cellule avec « jauge » façon barre de données Excel (fond en dégradé proportionnel à la valeur)
+function celluleBarre(n, max, couleur) {
+  if (!n) return `<td>0</td>`;
+  const pct = max ? Math.round(n / max * 100) : 0;
+  return `<td style="background:linear-gradient(to right, ${couleur} ${pct}%, transparent ${pct}%)">${n}</td>`;
+}
+
 function ongletSuiviMSP() {
   const stagiaires = S.data.stagiaires;
 
@@ -1021,19 +1028,22 @@ function ongletSuiviMSP() {
     const mesPassages = S.data.equipiers.filter(e => e.stagiaire_id === s.id)
       .map(e => S.data.passages.find(p => p.id === e.passage_id)).filter(Boolean).sort((a, b) => a.numero - b.numero);
     if (!mesPassages.length) return '';
+    const { bilan } = bilanStagiaire(s.id);
     const lignesComp = S.formation.competences.map(c => {
       const cellules = mesPassages.map(p => {
         const ev = S.data.evaluations.find(x => x.passage_id === p.id && x.stagiaire_id === s.id);
         const n = ev ? ev.notes[c.id] : null;
         return `<td>${n && n !== 'NE' ? `<span class="niv niv-${NIV_CLASSE[n]}">${n}</span>` : '—'}</td>`;
       }).join('');
-      return `<tr><td><span class="code">${esc(c.code)}</span></td>${cellules}</tr>`;
+      const b = bilan[c.id];
+      const cls = b.statut === 'Validé' ? 'statut-valide' : (b.statut === 'En cours' ? 'statut-eca' : (b.statut === '—' ? '' : 'statut-na'));
+      return `<tr><td><span class="code">${esc(c.code)}</span></td>${cellules}<td class="${cls}"><b>${b.statut}</b><br><small>${b.acquis}A/${b.eca}E/${b.na}N</small></td></tr>`;
     }).join('');
     const dec = s.decision_jury === 'valide' ? '<span class="statut-valide">✅ Validé</span>'
       : (s.decision_jury === 'non_valide' ? '<span class="statut-na">❌ Non validé</span>' : '<span class="info">— à décider —</span>');
     return `<h3>${esc(s.prenom)} ${esc(s.nom)}</h3>
       <div class="table-scroll"><table>
-        <tr><th>Compétence</th>${mesPassages.map(p => `<th>MSP n°${p.numero}</th>`).join('')}</tr>
+        <tr><th>Compétence</th>${mesPassages.map(p => `<th>MSP n°${p.numero}</th>`).join('')}<th>Validation (règle RIOFE)</th></tr>
         ${lignesComp}
       </table></div>
       <p class="info">Décision jury : ${dec}</p>`;
@@ -1050,6 +1060,48 @@ function ongletSuiviMSP() {
     return `<h3>${esc(s.prenom)} ${esc(s.nom)}</h3><table><tr><th>Passage</th><th>Mot du formateur</th></tr>${lignes}</table>`;
   }).join('');
 
+  // ---- Nombre de passages par formateur (qui a évalué qui, et combien de fois) ----
+  const nomsFormateurs = [...new Set(S.data.evaluations.map(e => e.formateur).filter(Boolean))];
+  let maxForm = 1;
+  const comptesForm = stagiaires.map(s => nomsFormateurs.map(f =>
+    S.data.evaluations.filter(e => e.stagiaire_id === s.id && e.formateur === f).length));
+  comptesForm.forEach(l => l.forEach(n => { if (n > maxForm) maxForm = n; }));
+  const tableFormateurs = nomsFormateurs.length ? `
+    <div class="table-scroll"><table>
+      <tr><th>Stagiaire</th>${nomsFormateurs.map(f => `<th>${esc(f)}</th>`).join('')}</tr>
+      ${stagiaires.map((s, i) => `<tr><td>${esc(s.prenom)} ${esc(s.nom)}</td>${nomsFormateurs.map((f, j) => celluleBarre(comptesForm[i][j], maxForm, '#f06292')).join('')}</tr>`).join('')}
+    </table></div>` : '<p class="info">Aucune évaluation enregistrée.</p>';
+
+  // ---- Nombre de passages par thématique ----
+  const themes = S.formation.themes;
+  let maxTheme = 1;
+  const comptesTheme = stagiaires.map(s => themes.map(t =>
+    S.data.evaluations.filter(e => {
+      const p = S.data.passages.find(x => x.id === e.passage_id);
+      return e.stagiaire_id === s.id && p && p.theme_id === t.id;
+    }).length));
+  comptesTheme.forEach(l => l.forEach(n => { if (n > maxTheme) maxTheme = n; }));
+  const tableThemes = themes.length ? `
+    <div class="table-scroll"><table>
+      <tr><th>Stagiaire</th>${themes.map(t => `<th>${esc(t.libelle)}</th>`).join('')}</tr>
+      ${stagiaires.map((s, i) => `<tr><td>${esc(s.prenom)} ${esc(s.nom)}</td>${themes.map((t, j) => celluleBarre(comptesTheme[i][j], maxTheme, '#81c784')).join('')}</tr>`).join('')}
+    </table></div>` : '<p class="info">Aucun thème défini pour cette formation.</p>';
+
+  // ---- Passages par cas concret / MSP imposée (utile surtout CA1E1E PPBE et SUAP, mais générique) ----
+  const cas = S.formation.cas || [];
+  const norm = t => String(t || '').trim().toLowerCase();
+  const tableCas = cas.length ? `
+    <div class="table-scroll"><table>
+      <tr><th>Stagiaire</th>${cas.map(c => `<th>${esc(c.libelle)}</th>`).join('')}</tr>
+      ${stagiaires.map(s => `<tr><td>${esc(s.prenom)} ${esc(s.nom)}</td>${cas.map(c => {
+        const n = S.data.evaluations.filter(e => {
+          const p = S.data.passages.find(x => x.id === e.passage_id);
+          return e.stagiaire_id === s.id && p && norm(p.sujet) === norm(c.libelle);
+        }).length;
+        return `<td>${n}</td>`;
+      }).join('')}</tr>`).join('')}
+    </table></div>` : '<p class="info">Aucun cas concret défini pour cette formation.</p>';
+
   $('session-contenu').innerHTML = `
     <div class="carte">
       <h2>Suivi par mise en situation (MSP) — vue groupe</h2>
@@ -1060,6 +1112,19 @@ function ongletSuiviMSP() {
       <h2>Mots du formateur par MSP</h2>
       <div class="info">Chaque stagiaire peut aussi consulter cette page, mais uniquement pour ses propres passages, depuis son espace personnel.</div>
       ${blocsMots || '<p class="info">Aucun commentaire enregistré.</p>'}
+    </div>
+    <div class="carte">
+      <h2>Nombre de passages par formateur</h2>
+      ${tableFormateurs}
+    </div>
+    <div class="carte">
+      <h2>Nombre de passages par thématique</h2>
+      ${tableThemes}
+    </div>
+    <div class="carte">
+      <h2>Passages par cas concret (MSP imposée / MSP type)</h2>
+      <div class="info">Qui est déjà passé sur quel cas concret — surtout utile pour CA1E1E PPBE et Équipier SUAP, mais disponible pour toutes les formations qui ont des cas concrets définis.</div>
+      ${tableCas}
     </div>`;
 }
 
