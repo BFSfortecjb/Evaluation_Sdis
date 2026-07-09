@@ -901,12 +901,15 @@ async function supprFormateur(id) {
 
 // ---------- Onglet Feuille de garde ----------
 function ongletGarde() {
+  const utiliseTypes = S.formation.utilise_types_msp;
   const nomStag = id => { const s = S.data.stagiaires.find(x => x.id === id); return s ? s.prenom + ' ' + s.nom : '?'; };
+  const libelleType = t => t === 'complexe' ? '🔴 Complexe' : t === 'mineure' ? '🟢 Mineure' : '';
   const lignes = S.data.passages.map(p => {
     const eq = S.data.equipiers.filter(e => e.passage_id === p.id);
     const theme = S.formation.themes.find(t => t.id === p.theme_id);
     return `<tr>
       <td>${p.numero}</td><td>${esc(p.jour)}</td><td>${esc(theme ? theme.libelle : '')}</td>
+      ${utiliseTypes ? `<td>${esc(libelleType(p.type_msp))}</td>` : ''}
       <td>${esc(p.sujet || '')}</td><td>${p.evaluateur ? esc(p.evaluateur) : '<span class="statut-eca">À affecter</span>'}</td>
       <td>${eq.map(e => esc(nomStag(e.stagiaire_id)) + (e.evalue ? '' : ' <small>(non évalué)</small>')).join('<br>')}</td>
       <td><button class="btn petit secondaire" onclick="supprPassage(${p.id})">✕</button></td></tr>`;
@@ -916,7 +919,7 @@ function ongletGarde() {
     <div class="carte">
       <h2>Feuille de garde — passages prévus</h2>
       <div class="table-scroll"><table>
-        <tr><th>N°</th><th>Jour</th><th>Thème</th><th>Sujet</th><th>Évaluateur</th><th>Équipiers</th><th></th></tr>
+        <tr><th>N°</th><th>Jour</th><th>Thème</th>${utiliseTypes ? '<th>Type MSP</th>' : ''}<th>Sujet</th><th>Évaluateur</th><th>Équipiers</th><th></th></tr>
         ${lignes}
       </table></div>
       <h3>Programmer un passage</h3>
@@ -924,6 +927,13 @@ function ongletGarde() {
         <div><label>Jour</label><select id="pa-jour">${joursFormation().map(j => `<option>${j}</option>`).join('')}</select></div>
         <div><label>Thème</label><select id="pa-theme">${S.formation.themes.map(t => `<option value="${t.id}">${esc(t.libelle)}</option>`).join('')}</select></div>
       </div>
+      ${utiliseTypes ? `<div class="ligne">
+        <div><label>Type de MSP</label><select id="pa-type-msp">
+          <option value="">— non défini —</option>
+          <option value="mineure">Mineure</option>
+          <option value="complexe">Complexe</option>
+        </select></div>
+      </div>` : ''}
       <div class="ligne">
         <div><label>Sujet / cas concret</label>
           <input id="pa-sujet" list="liste-cas" placeholder="libre ou choisir">
@@ -957,6 +967,7 @@ async function ajouterPassage() {
     ({ data: passage, error } = await sb.from('passages').insert({
       session_id: S.session.id, numero,
       jour: $('pa-jour').value, theme_id: Number($('pa-theme').value),
+      type_msp: (S.formation.utilise_types_msp && $('pa-type-msp')) ? ($('pa-type-msp').value || null) : null,
       sujet: $('pa-sujet').value.trim() || null, evaluateur: $('pa-eval').value || null,
     }).select().single());
     if (!error) break;
@@ -1037,6 +1048,13 @@ function formNouvelleMSP() {
         <div><label>Jour</label><select id="pa2-jour">${joursFormation().map(j => `<option>${j}</option>`).join('')}</select></div>
         <div><label>Thème</label><select id="pa2-theme">${S.formation.themes.map(t => `<option value="${t.id}">${esc(t.libelle)}</option>`).join('')}</select></div>
       </div>
+      ${S.formation.utilise_types_msp ? `<div class="ligne">
+        <div><label>Type de MSP</label><select id="pa2-type-msp">
+          <option value="">— non défini —</option>
+          <option value="mineure">Mineure</option>
+          <option value="complexe">Complexe</option>
+        </select></div>
+      </div>` : ''}
       <label>Sujet / cas concret</label>
       <input id="pa2-sujet" list="liste-cas2" placeholder="libre ou choisir">
       <datalist id="liste-cas2">${S.formation.cas.map(c => `<option value="${esc(c.libelle)}">`).join('')}</datalist>
@@ -1061,6 +1079,7 @@ async function creerMSPRapide() {
     ({ data: passage, error } = await sb.from('passages').insert({
       session_id: S.session.id, numero,
       jour: $('pa2-jour').value, theme_id: Number($('pa2-theme').value),
+      type_msp: (S.formation.utilise_types_msp && $('pa2-type-msp')) ? ($('pa2-type-msp').value || null) : null,
       sujet: $('pa2-sujet').value.trim() || null,
       evaluateur: S.user ? S.user.nom : null,
     }).select().single());
@@ -1309,7 +1328,8 @@ function classeStatutCompetence(statut) {
 }
 
 function bilanStagiaire(stagiaireId) {
-  let evals = S.data.evaluations.filter(e => e.stagiaire_id === stagiaireId);
+  const evalsToutes = S.data.evaluations.filter(e => e.stagiaire_id === stagiaireId);
+  let evals = evalsToutes;
 
   // Paramètres du stage (onglet « Paramètres », réservé RP/GFor) : si un nombre de MSP de
   // certification est fixé, seules les N dernières MSP évaluées de ce stagiaire comptent.
@@ -1325,6 +1345,20 @@ function bilanStagiaire(stagiaireId) {
   const seuilNA = (S.session && S.session.seuil_na_jury) || 2;
   const seuilECA = (S.session && S.session.seuil_eca_jury) || 4;
 
+  // Mode de validation spécifique à certaines formations (ex : CA1E1E — Sergent) : remplace la
+  // logique standard « acquis 2 fois » par une condition unique — au moins une MSP taguée
+  // « complexe » doit être notée intégralement en A/A+ (aucune ECA/NA/NE), toutes compétences
+  // confondues — indépendamment du plafond « nb_msp_certification » ci-dessus (on regarde tout le parcours).
+  let mspComplexeSansFaute = null; // null = mode non applicable à cette formation
+  if (S.formation && S.formation.mode_validation === 'msp_complexe_sans_faute') {
+    mspComplexeSansFaute = evalsToutes.some(ev => {
+      const p = S.data.passages.find(pp => pp.id === ev.passage_id);
+      if (!p || p.type_msp !== 'complexe') return false;
+      const notes = ev.notes || {};
+      return S.formation.competences.every(c => notes[c.id] === 'A' || notes[c.id] === 'A+');
+    });
+  }
+
   const bilan = {};
   for (const c of S.formation.competences) {
     let acquis = 0, eca = 0, na = 0;
@@ -1336,18 +1370,21 @@ function bilanStagiaire(stagiaireId) {
     }
     // Règle RIOFE : case grisée = « acquise » 2 fois ; case blanche = a minima ECA ;
     // au-delà des seuils NA/ECA réglés dans les Paramètres du stage, la validation relève de l'avis du jury.
+    // (sauf mode_validation « msp_complexe_sans_faute », qui remplace entièrement cette logique)
     let statut;
-    if (na >= seuilNA || eca >= seuilECA) {
+    if (mspComplexeSansFaute !== null) {
+      statut = mspComplexeSansFaute ? 'Validé' : (acquis + eca + na > 0 ? 'En cours' : '—');
+    } else if (na >= seuilNA || eca >= seuilECA) {
       statut = 'Avis du jury';
     } else if (c.grisee) {
       statut = acquis >= 2 ? 'Validé' : (acquis + eca + na > 0 ? 'En cours' : '—');
     } else {
       statut = acquis > 0 || eca > 0 ? 'Validé' : (na > 0 ? 'Non acquis' : '—');
     }
-    if (na === 1 && statut !== 'Validé' && statut !== 'Avis du jury') statut = 'Alerte NA';
+    if (mspComplexeSansFaute === null && na === 1 && statut !== 'Validé' && statut !== 'Avis du jury') statut = 'Alerte NA';
     bilan[c.id] = { acquis, eca, na, statut };
   }
-  return { bilan, nbPassages: evals.length };
+  return { bilan, nbPassages: evals.length, mspComplexeSansFaute };
 }
 
 // ---------- Onglet Paramètres du stage (réservé RP/GFor) ----------
@@ -1387,8 +1424,9 @@ async function enregistrerParametresStage() {
 
 function ongletValidation() {
   const comps = S.formation.competences;
+  const modeSansFaute = S.formation.mode_validation === 'msp_complexe_sans_faute';
   const lignes = S.data.stagiaires.map(s => {
-    const { bilan, nbPassages } = bilanStagiaire(s.id);
+    const { bilan, nbPassages, mspComplexeSansFaute } = bilanStagiaire(s.id);
     const cellules = comps.map(c => {
       const b = bilan[c.id];
       const cls = classeStatutCompetence(b.statut);
@@ -1397,7 +1435,8 @@ function ongletValidation() {
     const okMsp = nbPassages >= S.formation.nb_msp_min;
     const dec = s.decision_jury || '';
     return `<tr><td><b>${esc(s.prenom)} ${esc(s.nom)}</b><br>
-      <small class="${okMsp ? 'statut-valide' : 'statut-na'}">${nbPassages}/${S.formation.nb_msp_min} MSP évaluées</small><br>
+      <small class="${okMsp ? 'statut-valide' : 'statut-na'}">${nbPassages}/${S.formation.nb_msp_min} MSP évaluées</small>
+      ${modeSansFaute ? `<br><small class="${mspComplexeSansFaute ? 'statut-valide' : 'statut-na'}">${mspComplexeSansFaute ? '✅ MSP complexe sans faute' : '❌ pas encore de MSP complexe sans faute'}</small>` : ''}<br>
       <button class="btn petit secondaire" style="margin-top:4px" onclick="genererFicheSuivi(${s.id})">📄 Fiche PDF</button></td>${cellules}
       <td><select onchange="enregistrerDecisionJury(${s.id}, this.value)" style="width:auto">
         <option value="" ${dec === '' ? 'selected' : ''}>— À décider —</option>
@@ -1409,7 +1448,10 @@ function ongletValidation() {
   $('session-contenu').innerHTML = `
     <div class="carte">
       <h2>Validation des compétences</h2>
-      <div class="info">Règle RIOFE : compétence grisée = « acquise » (A ou A+) 2 fois minimum · ${S.formation.nb_msp_min} MSP évaluées minimum par stagiaire. Détail par case : nb Acquis / ECA / NA. La colonne « Décision jury » est la décision finale de la commission de certification.</div>
+      <div class="info">${modeSansFaute
+        ? `Règle spécifique à cette formation : validation conditionnée à au moins une MSP « complexe » notée intégralement en A/A+ (aucune ECA/NA/NE), toutes compétences confondues. ${S.formation.nb_msp_min} MSP évaluées minimum par stagiaire.`
+        : `Règle RIOFE : compétence grisée = « acquise » (A ou A+) 2 fois minimum · ${S.formation.nb_msp_min} MSP évaluées minimum par stagiaire. Détail par case : nb Acquis / ECA / NA.`}
+        La colonne « Décision jury » est la décision finale de la commission de certification.</div>
       <div class="table-scroll"><table>
         <tr><th>Stagiaire</th>${comps.map(c => `<th title="${esc(c.libelle)}">${esc(c.code)}</th>`).join('')}<th>Décision jury</th></tr>
         ${lignes}
@@ -1589,7 +1631,7 @@ async function ecranParametresFormations() {
       <td>${f.nb_jours}</td>
       <td>${f.nb_stagiaires_max}</td>
       <td>${f.nb_msp_min} (+${f.nb_msp_rattrapage} rattrap.)</td>
-      <td>NA ≥ ${f.seuil_na_jury_defaut ?? 2} / ECA ≥ ${f.seuil_eca_jury_defaut ?? 4}</td>
+      <td>${f.mode_validation === 'msp_complexe_sans_faute' ? '<span class="badge" style="background:#6a1b9a;color:#fff">MSP complexe sans faute</span>' : `NA ≥ ${f.seuil_na_jury_defaut ?? 2} / ECA ≥ ${f.seuil_eca_jury_defaut ?? 4}`}</td>
       <td style="white-space:nowrap">
         <button class="btn petit secondaire" onclick="ecranFormulaireFormation(${f.id})">✏️</button>
         <button class="btn petit secondaire" onclick="ecranCompetencesFormation(${f.id})">📋 Compétences</button>
@@ -1652,10 +1694,22 @@ function ecranFormulaireFormation(id) {
     </div>
 
     <h3>Avis du jury — seuils par défaut</h3>
-    <div class="info">Nombre de ECA ou de NA sur une même compétence à partir duquel la validation passe en « Avis du jury ». Valeur reprise à la création de chaque nouvelle session de cette formation (réglable ensuite session par session).</div>
+    <div class="info">Nombre de ECA ou de NA sur une même compétence à partir duquel la validation passe en « Avis du jury ». Valeur reprise à la création de chaque nouvelle session de cette formation (réglable ensuite session par session). Sans effet si le mode de validation ci-dessous est réglé sur « MSP complexe sans faute ».</div>
     <div class="ligne">
       <div><label>Nombre de NA</label><input id="fm-seuil-na" type="number" min="1" value="${f?.seuil_na_jury_defaut ?? 2}"></div>
       <div><label>Nombre de ECA</label><input id="fm-seuil-eca" type="number" min="1" value="${f?.seuil_eca_jury_defaut ?? 4}"></div>
+    </div>
+
+    <h3>Types de MSP et mode de validation</h3>
+    <div class="info">Fonctionnalité optionnelle, activable formation par formation (ex : CA1E1E — Sergent). Une fois activée, chaque MSP programmée peut être étiquetée « mineure » ou « complexe ».</div>
+    <label><input type="checkbox" id="fm-types-msp" style="width:auto" ${f?.utilise_types_msp ? 'checked' : ''} onchange="$('fm-mode-validation-ligne').style.display = this.checked ? '' : 'none'"> Utiliser les types de MSP (mineure / complexe) pour cette formation</label>
+    <div class="ligne" id="fm-mode-validation-ligne" style="display:${f?.utilise_types_msp ? '' : 'none'}">
+      <div><label>Mode de validation</label>
+        <select id="fm-mode-validation">
+          <option value="standard" ${(!f || f.mode_validation === 'standard') ? 'selected' : ''}>Standard (règles RIOFE habituelles — acquis 2 fois / seuils NA-ECA)</option>
+          <option value="msp_complexe_sans_faute" ${f?.mode_validation === 'msp_complexe_sans_faute' ? 'selected' : ''}>MSP complexe sans faute (remplace la règle standard — au moins une MSP complexe notée intégralement A/A+)</option>
+        </select>
+      </div>
     </div>
 
     <h3>Barème d'encadrement (RIOFE) — RP/formateurs vis-à-vis du nombre de stagiaires</h3>
@@ -1689,6 +1743,8 @@ async function enregistrerFormation(id) {
     seuil_na_jury_defaut: Number($('fm-seuil-na').value) || 2,
     seuil_eca_jury_defaut: Number($('fm-seuil-eca').value) || 4,
     bareme_formateurs: _baremeEnCours,
+    utilise_types_msp: $('fm-types-msp').checked,
+    mode_validation: $('fm-types-msp').checked ? $('fm-mode-validation').value : 'standard',
   };
   const req = id ? sb.from('formations').update(payload).eq('id', id) : sb.from('formations').insert(payload);
   const { error } = await req;
