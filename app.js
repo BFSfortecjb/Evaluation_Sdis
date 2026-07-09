@@ -57,7 +57,8 @@ function majMenu(actif) {
   m.innerHTML = `<button class="${actif === 'dash' ? 'actif' : ''}" onclick="ecranAccueilStaff()">🏠 Tableau de bord</button>` +
     (peutCreer ? `<button class="${actif === 'new' ? 'actif' : ''}" onclick="ecranNouvelleSession()">➕ Nouvelle session</button>` : '') +
     `<button class="${actif === 'apt' ? 'actif' : ''}" onclick="ecranGestionFormateurs()">👨‍🏫 Formateurs</button>` +
-    (S.vision === 'gfor' ? `<button class="${actif === 'param-form' ? 'actif' : ''}" onclick="ecranParametresFormations()">⚙️ Paramètres formations</button>` : '');
+    (S.vision === 'gfor' ? `<button class="${actif === 'param-form' ? 'actif' : ''}" onclick="ecranParametresFormations()">⚙️ Paramètres formations</button>` : '') +
+    `<button class="${actif === 'parcours' ? 'actif' : ''}" onclick="ecranMonParcoursStagiaire()">📖 Mon parcours stagiaire</button>`;
   m.style.display = '';
 }
 
@@ -156,7 +157,7 @@ async function ecranGestionFormateurs() {
 
   const lignes = (apt || []).map(a => `<tr>
       <td>${esc(a.matricule || '')}</td><td>${esc(a.grade || '')}</td>
-      <td><b>${esc(a.nom)}</b> ${esc(a.prenom)}${a.gfor ? ' <span class="badge" style="background:#6a1b9a;color:#fff">GFOR</span>' : ''}</td>
+      <td><b>${esc(a.nom)}</b> ${esc(a.prenom)}${a.gfor ? ' <span class="badge" style="background:#6a1b9a;color:#fff">GFOR</span>' : ''}${a.chef_centre ? ' <span class="badge" style="background:#00695c;color:#fff">CHEF CENTRE</span>' : ''}</td>
       <td>${esc(a.statut || '')}</td><td>${esc(a.cis || '')}</td>
       <td>${esc(a.email || '')}</td>
       <td>${(a.qualifications || []).map(q => badgeQualif(q, estGfor)).join(' ') || '<span class="info">aucune</span>'}</td>
@@ -192,6 +193,7 @@ async function ecranGestionFormateurs() {
       <input id="ap-mdp" type="password" placeholder="6 caractères minimum — laisser vide pour passer par l'email">
       <div class="info">Si renseigné (avec un email), le compte est créé directement avec ce mot de passe — la personne pourra le changer ensuite dans « Mon profil ». Utile si les emails de confirmation n'arrivent pas (filtres antispam type Mailinblack).</div>
       <label><input type="checkbox" id="ap-gfor" style="width:auto"> Donner l'accès GFor (gestion complète : sessions, formateurs, liste d'aptitude...)</label>
+      <label><input type="checkbox" id="ap-chef-centre" style="width:auto"> Donner l'accès Chef de centre (suivi des MSP des stagiaires de son CIS, réglé ci-dessus)</label>
       <label>Qualifications de la personne</label>
       <div class="ligne">
         <div><label>Domaine</label><select id="ap-q-dom">${DOMAINES_COMP.map(d => `<option>${d}</option>`).join('')}</select></div>
@@ -247,11 +249,12 @@ async function ajouterAptitude() {
   const email = $('ap-email').value.trim().toLowerCase() || null;
   const mdp = $('ap-mdp').value;
   const gfor = $('ap-gfor').checked;
+  const chefCentre = $('ap-chef-centre').checked;
   const { data: pers, error } = await sb.from('aptitudes').insert({
     matricule: $('ap-mat').value.trim() || null, grade: $('ap-grade').value,
     statut: $('ap-statut').value, nom, prenom,
     cis: $('ap-cis').value || null,
-    email, gfor,
+    email, gfor, chef_centre: chefCentre,
   }).select().single();
   if (error) return toast(error.message, false);
   const { error: e2 } = await sb.from('qualifications').insert(
@@ -337,6 +340,7 @@ function ecranModifierAptitude(id) {
     </div>
     <label>Email (compte utilisateur)</label><input id="ma-email" type="email" value="${esc(a.email || '')}">
     <label><input type="checkbox" id="ma-gfor" style="width:auto" ${a.gfor ? 'checked' : ''}> Donner l'accès GFor (gestion complète : sessions, formateurs, liste d'aptitude...)</label>
+    <label><input type="checkbox" id="ma-chef-centre" style="width:auto" ${a.chef_centre ? 'checked' : ''}> Donner l'accès Chef de centre (suivi des MSP des stagiaires de son CIS, réglé ci-dessus)</label>
     <button class="btn" onclick="enregistrerModifAptitude(${a.id})">Enregistrer les corrections</button>
 
     <h3>Compte de connexion</h3>
@@ -372,10 +376,11 @@ async function enregistrerModifAptitude(id) {
   if (!nom || !prenom) return toast('Nom et prénom requis', false);
   const email = $('ma-email').value.trim().toLowerCase() || null;
   const gfor = $('ma-gfor').checked;
+  const chefCentre = $('ma-chef-centre').checked;
   const { data: apt, error } = await sb.from('aptitudes').update({
     matricule: $('ma-mat').value.trim() || null, grade: $('ma-grade').value,
     nom, prenom, statut: $('ma-statut').value || null, cis: $('ma-cis').value || null,
-    email, gfor,
+    email, gfor, chef_centre: chefCentre,
   }).eq('id', id).select('*, qualifications(*)').single();
   if (error) return toast(error.message, false);
   if (apt) await synchroniserRoleProfil(apt);
@@ -387,7 +392,14 @@ async function enregistrerModifAptitude(id) {
 // (ex : on coche l'accès GFor sur une personne qui a déjà un compte).
 async function synchroniserRoleProfil(aptitude) {
   if (!aptitude.email) return;
-  const nouveauRole = aptitude.gfor ? 'gfor' : ((aptitude.qualifications || []).some(q => q.role === 'rp') ? 'rp' : 'formateur');
+  const quals = aptitude.qualifications || [];
+  const estRP = quals.some(q => q.role === 'rp');
+  // Sans aucune qualification (ni formateur, ni RP), la personne est considérée comme
+  // un simple stagiaire (ex : recrue) plutôt que formateur par défaut.
+  const nouveauRole = aptitude.gfor ? 'gfor'
+    : aptitude.chef_centre ? 'chef_centre'
+    : estRP ? 'rp'
+    : quals.length ? 'formateur' : 'stagiaire';
   const { error } = await sb.from('profils').update({ role: nouveauRole }).eq('email', aptitude.email);
   if (error) console.warn('Synchronisation profil impossible :', error.message);
 }
@@ -579,7 +591,7 @@ async function ecranAccueilStaff() {
   show('ecran-staff-accueil');
   const [sess, stag, forms, formt] = await Promise.all([
     sb.from('sessions').select('*, formations(*)').order('date_debut', { ascending: true, nullsFirst: false }),
-    sb.from('stagiaires').select('id, session_id'),
+    sb.from('stagiaires').select('id, session_id, cis'),
     sb.from('session_formateurs').select('id, session_id, nom'),
     sb.from('formations').select('*').eq('actif', true),
   ]);
@@ -599,6 +611,8 @@ async function ecranAccueilStaff() {
     if (S.omniscient) return true;
     if (S.vision === 'rp') return !!(S.user && s.responsable === S.user.nom);
     if (S.vision === 'formateur') return !!(S.user && (forms.data || []).some(f => f.session_id === s.id && f.nom === S.user.nom));
+    // Chef de centre : uniquement les sessions où au moins un stagiaire de son CIS est inscrit.
+    if (S.vision === 'chef_centre') return !!(S.user && (stag.data || []).some(x => x.session_id === s.id && x.cis === S.user.cis));
     return true;
   });
 
@@ -716,16 +730,20 @@ async function ouvrirSession(sessionId) {
     ' · Responsable : ' + (sess.responsable || '?') +
     ' · Code stagiaire : ' + sess.code_acces;
 
-  const onglets = [
-    ['stagiaires', 'Stagiaires'], ['formateurs', 'Formateurs'], ['garde', 'Feuille de garde'],
-    ['evaluations', 'Évaluations'], ['msp', 'Suivi MSP'], ['validation', 'Validation'], ['comparatif', 'Comparatif'],
-  ];
+  // Chef de centre : accès restreint au seul suivi MSP (filtré sur les stagiaires de son CIS),
+  // pas de gestion des stagiaires/formateurs/évaluations des autres centres.
+  const onglets = S.vision === 'chef_centre'
+    ? [['msp', 'Suivi MSP']]
+    : [
+        ['stagiaires', 'Stagiaires'], ['formateurs', 'Formateurs'], ['garde', 'Feuille de garde'],
+        ['evaluations', 'Évaluations'], ['msp', 'Suivi MSP'], ['validation', 'Validation'], ['comparatif', 'Comparatif'],
+      ];
   // Réglages du stage : réservés au RP et au GFor
   if (S.vision === 'rp' || S.vision === 'gfor') onglets.push(['parametres', 'Paramètres']);
   $('session-onglets').innerHTML = onglets.map(([id, lbl]) =>
     `<button id="ong-${id}" onclick="ongletSession('${id}')">${lbl}</button>`).join('');
   show('ecran-session');
-  ongletSession(S.vision === 'formateur' ? 'evaluations' : 'stagiaires');
+  ongletSession(S.vision === 'chef_centre' ? 'msp' : S.vision === 'formateur' ? 'evaluations' : 'stagiaires');
 }
 
 function ongletSession(id) {
@@ -742,17 +760,20 @@ function ongletStagiaires() {
     <tr>
       <td>${s.photo_url ? `<img src="${esc(s.photo_url)}" alt="" style="width:32px;height:32px;border-radius:50%;object-fit:cover;vertical-align:middle">` : `<span class="avatar-stag" style="width:32px;height:32px;font-size:11px">${esc(initiales(s))}</span>`}</td>
       <td>${esc(s.nom)}</td><td>${esc(s.prenom)}</td><td>${esc(s.matricule || '')}</td><td>${esc(s.cis || '')}</td>
+      <td>${s.aptitude_id ? '<span class="statut-valide">✓ compte</span>' : '<span class="info">—</span>'}</td>
       <td style="white-space:nowrap">
         <label class="btn petit secondaire" style="cursor:pointer">📷<input type="file" accept="image/*" style="display:none" onchange="uploaderPhotoStagiaire(${s.id}, this)"></label>
+        <button class="btn petit secondaire" title="Compte personnel" onclick="ecranCompteStagiaire(${s.id})">🔑</button>
+        ${s.aptitude_id ? `<button class="btn petit secondaire" title="Historique multi-stages" onclick="voirHistoriqueStagiaire(${s.aptitude_id})">🕘</button>` : ''}
         <button class="btn petit secondaire" onclick="supprStagiaire(${s.id})">✕</button>
       </td>
     </tr>`).join('');
   $('session-contenu').innerHTML = `
     <div class="carte">
       <h2>Stagiaires (${S.data.stagiaires.length})</h2>
-      <div class="info">📷 = ajouter/remplacer la photo du stagiaire (utilisée dans la grille d'évaluation par équipe).</div>
+      <div class="info">📷 = photo (grille d'évaluation par équipe) · 🔑 = créer/lier le compte personnel du stagiaire (suivi de son parcours sur plusieurs stages) · 🕘 = voir son historique d'autres stages, une fois le compte lié.</div>
       <div class="table-scroll"><table>
-        <tr><th>Photo</th><th>Nom</th><th>Prénom</th><th>Matricule</th><th>CIS</th><th></th></tr>${lignes}
+        <tr><th>Photo</th><th>Nom</th><th>Prénom</th><th>Matricule</th><th>CIS</th><th>Compte</th><th></th></tr>${lignes}
       </table></div>
       <h3>Ajouter un stagiaire</h3>
       <div class="ligne">
@@ -848,6 +869,162 @@ async function uploaderPhotoStagiaire(id, input) {
   const { error: eMaj } = await sb.from('stagiaires').update({ photo_url: pub.publicUrl }).eq('id', id);
   if (eMaj) return toast(eMaj.message, false);
   await chargerDonneesSession(S.session.id); ongletStagiaires(); toast('Photo enregistrée');
+}
+
+// ---------- Compte personnel du stagiaire ----------
+// Un stagiaire est aussi, potentiellement, une personne de la liste d'aptitude (un formateur CCH
+// peut par exemple devenir stagiaire sur une session CA1E1E) : on réutilise la même table
+// « aptitudes » comme identité stable de la personne, quel que soit son rôle du moment.
+// stagiaires.aptitude_id relie la ligne « stagiaire » (propre à une session) à cette identité,
+// ce qui permet de retrouver tout son parcours (formateur ou stagiaire) au même endroit.
+async function ecranCompteStagiaire(id) {
+  const s = S.data.stagiaires.find(x => x.id === id);
+  if (!s) return;
+  let apt = null;
+  if (s.aptitude_id) {
+    const { data } = await sb.from('aptitudes').select('*').eq('id', s.aptitude_id).maybeSingle();
+    apt = data;
+  } else {
+    // Suggestion de rapprochement : une personne existante dans la liste d'aptitude
+    // (même matricule, ou même nom + prénom) est peut-être déjà cette personne.
+    const { data: candidats } = await sb.from('aptitudes').select('*');
+    apt = (candidats || []).find(a =>
+      (s.matricule && a.matricule === s.matricule)) ||
+      (candidats || []).find(a => (a.nom + a.prenom).toLowerCase() === (s.nom + s.prenom).toLowerCase()) || null;
+  }
+  $('session-contenu').innerHTML = `<div class="carte">
+    <span class="lien-retour" onclick="ongletStagiaires()">← Retour aux stagiaires</span>
+    <h2>Compte personnel — ${esc(s.prenom)} ${esc(s.nom)}</h2>
+    ${s.aptitude_id
+      ? `<div class="info">Déjà relié à la liste d'aptitude (identité stable) — email : ${esc(apt?.email || 'non renseigné')}.</div>`
+      : apt
+        ? `<div class="info">Une fiche correspondante existe déjà dans la liste d'aptitude (${esc(apt.prenom)} ${esc(apt.nom)}${apt.matricule ? ', matricule ' + esc(apt.matricule) : ''}) — elle sera reliée à ce stagiaire pour permettre le suivi de son parcours.</div>`
+        : `<div class="info">Aucune fiche correspondante trouvée — une nouvelle fiche d'identité sera créée pour cette personne.</div>`}
+    <label>Email (compte de connexion)</label>
+    <input id="cs-email" type="email" value="${esc(apt?.email || '')}">
+    <label>Mot de passe à créer (laisser vide pour ne relier que l'identité, sans créer le compte maintenant)</label>
+    <input id="cs-mdp" type="password" placeholder="6 caractères minimum">
+    <button class="btn" onclick="creerCompteStagiaire(${id})">Enregistrer</button>
+  </div>`;
+}
+
+async function creerCompteStagiaire(id) {
+  const s = S.data.stagiaires.find(x => x.id === id);
+  if (!s) return;
+  const email = $('cs-email').value.trim().toLowerCase();
+  const mdp = $('cs-mdp').value;
+
+  let aptitudeId = s.aptitude_id;
+  if (!aptitudeId) {
+    // Rapprochement identique à ecranCompteStagiaire, refait ici pour ne pas dépendre de l'état d'écran.
+    const { data: candidats } = await sb.from('aptitudes').select('*');
+    const existant = (candidats || []).find(a => (s.matricule && a.matricule === s.matricule)) ||
+      (candidats || []).find(a => (a.nom + a.prenom).toLowerCase() === (s.nom + s.prenom).toLowerCase());
+    if (existant) {
+      aptitudeId = existant.id;
+      if (email && !existant.email) await sb.from('aptitudes').update({ email }).eq('id', existant.id);
+    } else {
+      const { data: nouveau, error: eIns } = await sb.from('aptitudes').insert({
+        matricule: s.matricule || null, nom: s.nom, prenom: s.prenom, cis: s.cis || null, email: email || null,
+      }).select().single();
+      if (eIns) return toast(eIns.message, false);
+      aptitudeId = nouveau.id;
+    }
+    const { error: eLien } = await sb.from('stagiaires').update({ aptitude_id: aptitudeId }).eq('id', id);
+    if (eLien) return toast(eLien.message, false);
+  } else if (email) {
+    await sb.from('aptitudes').update({ email }).eq('id', aptitudeId);
+  }
+
+  if (mdp) {
+    if (mdp.length < 6) {
+      toast('Identité enregistrée, mais mot de passe ignoré (6 caractères minimum)', false);
+    } else if (!email) {
+      toast('Identité enregistrée, mais compte non créé : renseigner un email', false);
+    } else {
+      const { data: { session: sessionActuelle } } = await sb.auth.getSession();
+      const { data: inscription, error: eSignup } = await sb.auth.signUp({ email, password: mdp });
+      if (eSignup) {
+        toast('Identité enregistrée, mais compte non créé : ' + eSignup.message, false);
+      } else if (inscription.session) {
+        // signUp a activé la session du nouveau compte à la place de la tienne : on se déconnecte
+        // immédiatement pour ne pas rester connecté à sa place.
+        await sb.auth.signOut();
+        toast('Compte créé pour ' + s.prenom + ' ' + s.nom + ' — reconnecte-toi maintenant.');
+        show('ecran-login');
+        return;
+      } else {
+        toast('Identité enregistrée, compte créé — confirmation par email encore requise avant sa 1ère connexion.');
+      }
+      if (sessionActuelle) await sb.auth.setSession({ access_token: sessionActuelle.access_token, refresh_token: sessionActuelle.refresh_token });
+    }
+  } else {
+    toast('Identité enregistrée');
+  }
+  await chargerDonneesSession(S.session.id); ongletStagiaires();
+}
+
+// Historique multi-stages d'une personne (formateur devenu stagiaire, ou stagiaire ayant
+// déjà suivi d'autres stages) : consultable par RP/GFor depuis l'onglet Stagiaires.
+async function voirHistoriqueStagiaire(aptitudeId) {
+  const { data: passages, error } = await sb.from('stagiaires')
+    .select('*, sessions(*, formations(libelle, couleur))').eq('aptitude_id', aptitudeId);
+  if (error) return toast(error.message, false);
+  const lignes = (passages || [])
+    .sort((a, b) => (b.sessions?.date_debut || '').localeCompare(a.sessions?.date_debut || ''))
+    .map(p => `<div class="carte carte-session" style="border-left-color:${esc(p.sessions?.formations?.couleur || '#607d8b')}" onclick="ouvrirSession('${p.sessions?.id}')">
+        <b>${esc(p.sessions?.formations?.libelle || '?')}</b> — ${esc(p.sessions?.lieu || '')}
+        <div class="info">${esc(p.sessions?.date_debut || '?')} → ${esc(p.sessions?.date_fin || '?')}
+          ${p.decision_jury ? ' · Décision : ' + (p.decision_jury === 'valide' ? '✅ Validé' : '❌ Non validé') : ''}</div>
+      </div>`).join('');
+  $('session-contenu').innerHTML = `<div class="carte">
+    <span class="lien-retour" onclick="ongletStagiaires()">← Retour aux stagiaires</span>
+    <h2>Historique des stages</h2>
+    <div class="info">Tous les stages suivis par cette personne, tous rôles confondus (formateur pouvant devenir stagiaire, etc.). Cliquer sur un stage l'ouvre.</div>
+    ${lignes || '<p class="info">Aucun autre stage enregistré.</p>'}
+  </div>`;
+}
+
+// ---------- Mon parcours (stagiaire) — accessible à toute personne de la liste d'aptitude,
+// que ce soit son espace principal (compte « stagiaire » pur) ou un complément à son espace
+// formateur/RP/GFor habituel (ex : formateur CCH devenu stagiaire sur une session CA1E1E).
+async function ecranMonParcoursStagiaire() {
+  majMenu('parcours');
+  show('ecran-staff-accueil');
+  const { data: { user } } = await sb.auth.getUser();
+  const { data: apt } = await sb.from('aptitudes').select('*').ilike('email', user?.email || '').maybeSingle();
+  if (!apt) {
+    $('staff-dashboard').innerHTML = `<div class="carte"><p class="info">Aucune fiche d'identité trouvée pour ton compte — contacte le GFor.</p></div>`;
+    return;
+  }
+  const { data: passages, error } = await sb.from('stagiaires')
+    .select('*, sessions(*, formations(libelle, couleur))').eq('aptitude_id', apt.id);
+  if (error) return toast(error.message, false);
+  const lignes = (passages || [])
+    .sort((a, b) => (b.sessions?.date_debut || '').localeCompare(a.sessions?.date_debut || ''))
+    .map(p => `<div class="carte carte-session" style="border-left-color:${esc(p.sessions?.formations?.couleur || '#607d8b')}" onclick="ouvrirMonStage(${p.id}, '${p.sessions?.id}')">
+        <b>${esc(p.sessions?.formations?.libelle || '?')}</b> — ${esc(p.sessions?.lieu || '')}
+        <div class="info">${esc(p.sessions?.date_debut || '?')} → ${esc(p.sessions?.date_fin || '?')}
+          ${p.decision_jury ? ' · Décision : ' + (p.decision_jury === 'valide' ? '✅ Validé' : '❌ Non validé') : ''}</div>
+      </div>`).join('');
+  $('staff-dashboard').innerHTML = `<div class="carte">
+    <h2>Mon parcours de stagiaire</h2>
+    <div class="info">Tous les stages où tu as été inscrit(e) comme stagiaire, quelle que soit ta fonction habituelle par ailleurs.</div>
+  </div>
+  ${lignes || '<div class="carte"><p class="info">Aucun stage enregistré à ton nom pour le moment.</p></div>'}`;
+}
+
+// Ouvre son propre passage de stagiaire (vue stagiaire classique) depuis « Mon parcours »,
+// sans repasser par un code de session.
+async function ouvrirMonStage(stagiaireId, sessionId) {
+  const { data: sess, error } = await sb.from('sessions').select('*').eq('id', sessionId).single();
+  if (error) return toast(error.message, false);
+  S.session = sess;
+  await chargerFormation(sess.formation_id);
+  const { data: stag } = await sb.from('stagiaires').select('*').eq('id', stagiaireId).single();
+  S.stagiaire = stag;
+  $('bandeau-user').textContent = (stag.prenom + ' ' + stag.nom) + ' (mon parcours)';
+  ecranAccueilStagiaire();
 }
 
 // ---------- Onglet Formateurs (inscription depuis la liste d'aptitude) ----------
@@ -1205,6 +1382,12 @@ const MSP_SOUS_ONGLETS = [
 
 function ongletSuiviMSP(vue) {
   if (vue) _mspVue = vue;
+  // Chef de centre : uniquement le suivi des compétences (déjà filtré sur son CIS) — les vues
+  // par formateur/thème/cas concret concernent toute la promotion et n'ont pas lieu d'être ici.
+  if (S.vision === 'chef_centre') {
+    $('session-contenu').innerHTML = _mspVueCompetences();
+    return;
+  }
   const nav = `<div class="onglets" style="margin-bottom:10px">${MSP_SOUS_ONGLETS.map(([id, lbl]) =>
     `<button class="${_mspVue === id ? 'actif' : ''}" onclick="ongletSuiviMSP('${id}')">${lbl}</button>`).join('')}</div>`;
   const rendus = {
@@ -1216,7 +1399,10 @@ function ongletSuiviMSP(vue) {
 
 // ---- Suivi des compétences : une colonne par MSP (numéro seul, pour rester lisible) ----
 function _mspVueCompetences() {
-  const stagiaires = S.data.stagiaires;
+  // Chef de centre : ne voit que les stagiaires de son propre CIS, pas toute la promotion.
+  const stagiaires = S.vision === 'chef_centre' && S.user
+    ? S.data.stagiaires.filter(s => s.cis === S.user.cis)
+    : S.data.stagiaires;
   const blocs = stagiaires.map(s => {
     const mesPassages = S.data.equipiers.filter(e => e.stagiaire_id === s.id)
       .map(e => S.data.passages.find(p => p.id === e.passage_id)).filter(Boolean).sort((a, b) => a.numero - b.numero);
@@ -1242,8 +1428,9 @@ function _mspVueCompetences() {
       <p class="info">Décision jury : ${dec}</p>`;
   }).join('');
   return `<div class="carte">
-      <div class="info">Chaque colonne = le numéro de la MSP. Validation calculée selon la règle RIOFE (grisée = acquise 2 fois, blanche = a minima ECA).</div>
-      ${blocs || '<p class="info">Aucun passage enregistré.</p>'}
+      <div class="info">Chaque colonne = le numéro de la MSP. Validation calculée selon la règle RIOFE (grisée = acquise 2 fois, blanche = a minima ECA).${
+        S.vision === 'chef_centre' ? ' Vue restreinte aux stagiaires de ton CIS.' : ''}</div>
+      ${blocs || `<p class="info">${S.vision === 'chef_centre' ? 'Aucun stagiaire de ton CIS sur cette session.' : 'Aucun passage enregistré.'}</p>`}
     </div>`;
 }
 
