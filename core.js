@@ -68,12 +68,16 @@ async function chargerProfil() {
     const { data: apt } = await sb.from('aptitudes').select('*, qualifications(*)').ilike('email', user.email || '').limit(1);
     if (apt && apt.length) {
       const a = apt[0];
-      const estRP = (a.qualifications || []).some(q => q.role === 'rp');
-      // a.gfor (case à cocher dans la liste d'aptitude) permet de donner l'accès GFor
-      // sans passer par la base — sinon rôle déduit des qualifications (RP > Formateur).
+      const quals = a.qualifications || [];
+      const estRP = quals.some(q => q.role === 'rp');
+      // a.gfor / a.chef_centre (cases à cocher dans la liste d'aptitude) permettent de donner ces
+      // accès sans passer par la base — sinon rôle déduit des qualifications (RP > Formateur).
+      // Une personne sans aucune qualification (ex : simple recrue pas encore formée) est
+      // considérée comme stagiaire par défaut plutôt que formateur.
+      const role = a.gfor ? 'gfor' : a.chef_centre ? 'chef_centre' : estRP ? 'rp' : (quals.length ? 'formateur' : 'stagiaire');
       const ins = await sb.from('profils').insert({
         id: user.id, nom: a.prenom + ' ' + a.nom, email: user.email,
-        role: a.gfor ? 'gfor' : (estRP ? 'rp' : 'formateur'), cis: a.cis,
+        role, cis: a.cis,
       }).select().single();
       if (ins.error) debugShow('Création de profil impossible : ' + JSON.stringify(ins.error));
       profil = ins.data;
@@ -87,7 +91,11 @@ async function chargerProfil() {
   }
   S.user = profil;
   S.vision = profil.role;
-  S.omniscient = true; // par défaut : le GFor voit tout, même pendant le développement/tests
+  // « Vue globale » par défaut uniquement pour le GFor (même pendant le développement/tests) —
+  // pour les autres rôles (RP, formateur, chef de centre), le filtrage sur leurs propres
+  // sessions/CIS s'applique par défaut, sans quoi il n'aurait aucun effet (pas de case à cocher
+  // pour eux pour le désactiver).
+  S.omniscient = profil.role === 'gfor';
   $('bandeau-user').textContent = profil.nom;
   $('btn-logout').style.display = '';
   // Un rôle donne accès à sa vision et à celles en dessous
@@ -105,7 +113,10 @@ async function chargerProfil() {
   // et ne voir que celles où l'on est réellement déclaré RP/Formateur (pour tester en conditions réelles).
   $('lbl-omniscient').style.display = profil.role === 'gfor' ? '' : 'none';
   $('chk-omniscient').checked = true;
-  ecranAccueilStaff(); // défini dans app.js
+  // Un profil « stagiaire » pur (aucune qualification formateur/RP) atterrit directement sur
+  // son propre parcours, sans tableau de bord d'encadrement.
+  if (profil.role === 'stagiaire') ecranMonParcoursStagiaire();
+  else ecranAccueilStaff(); // défini dans app.js
 }
 
 function toggleOmniscient(v) {
@@ -126,17 +137,6 @@ async function logout() {
   $('lbl-omniscient').style.display = 'none';
   $('menu-gauche').style.display = 'none';
   show('ecran-login');
-}
-
-// ---------- Création de compte (réservée à la liste d'aptitude) ----------
-async function creerCompte() {
-  const email = $('login-email').value.trim().toLowerCase();
-  const mdp = $('login-mdp').value;
-  if (!email || mdp.length < 6) return toast('Renseigner email + mot de passe (6 caractères minimum)', false);
-  const { data, error } = await sb.auth.signUp({ email, password: mdp });
-  if (error) return toast(error.message, false);
-  if (data.session) await chargerProfil(); // profil créé automatiquement si email dans la liste d'aptitude
-  else toast('Compte créé — clique sur le lien reçu par email pour confirmer, puis connecte-toi.');
 }
 
 async function motDePasseOublie() {
