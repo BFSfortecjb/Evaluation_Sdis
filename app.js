@@ -1286,7 +1286,7 @@ async function prendrePassage(passageId) {
 // ---------- Évaluation de toute l'équipe d'un passage sur une seule page (pensé mobile) ----------
 // Une colonne par équipier (avatar + nom), une ligne par compétence avec un menu déroulant,
 // puis APP à proposer / commentaire par équipier en bas de page.
-let _evalPassageCourante = null; // {passageId, parStagiaire: {stagId: {notes:{}, app1, commentaire}}}
+let _evalPassageCourante = null; // {passageId, parStagiaire: {stagId: {notes:{}, app1, app2, app3, commentaire}}}
 
 function initiales(s) {
   return (((s.prenom || '?')[0] || '?') + ((s.nom || '?')[0] || '?')).toUpperCase();
@@ -1304,7 +1304,8 @@ function formEvaluationPassage(passageId) {
     const existante = S.data.evaluations.find(ev => ev.passage_id === passageId && ev.stagiaire_id === s.id);
     _evalPassageCourante.parStagiaire[s.id] = {
       notes: existante ? { ...existante.notes } : {},
-      app1: existante?.app1 || '', commentaire: existante?.commentaire || '',
+      app1: existante?.app1 || '', app2: existante?.app2 || '', app3: existante?.app3 || '',
+      commentaire: existante?.commentaire || '',
     };
     if (existante && existante.ressenti_formateur != null) ressentiExistant = existante.ressenti_formateur;
   }
@@ -1336,7 +1337,9 @@ function formEvaluationPassage(passageId) {
       <div class="section-titre" style="margin-top:16px">APP à proposer / Commentaire</div>
       <div class="grille-eval-equipe">
         ${stags.map(s => `<div class="colonne-stag">
-          <textarea placeholder="APP à proposer" oninput="_evalPassageCourante.parStagiaire[${s.id}].app1 = this.value">${esc(_evalPassageCourante.parStagiaire[s.id].app1)}</textarea>
+          <textarea placeholder="APP 1" oninput="_evalPassageCourante.parStagiaire[${s.id}].app1 = this.value">${esc(_evalPassageCourante.parStagiaire[s.id].app1)}</textarea>
+          <textarea placeholder="APP 2" oninput="_evalPassageCourante.parStagiaire[${s.id}].app2 = this.value">${esc(_evalPassageCourante.parStagiaire[s.id].app2)}</textarea>
+          <textarea placeholder="APP 3" oninput="_evalPassageCourante.parStagiaire[${s.id}].app3 = this.value">${esc(_evalPassageCourante.parStagiaire[s.id].app3)}</textarea>
           <textarea placeholder="Commentaire" oninput="_evalPassageCourante.parStagiaire[${s.id}].commentaire = this.value">${esc(_evalPassageCourante.parStagiaire[s.id].commentaire)}</textarea>
         </div>`).join('')}
       </div>
@@ -1351,7 +1354,8 @@ async function enregistrerEvaluationPassage() {
   const lignes = Object.entries(_evalPassageCourante.parStagiaire).map(([stagiaireId, d]) => ({
     passage_id: _evalPassageCourante.passageId, stagiaire_id: Number(stagiaireId),
     formateur: S.user ? S.user.nom : null, notes: d.notes, ressenti_formateur: ressenti,
-    app1: (d.app1 || '').trim() || null, commentaire: (d.commentaire || '').trim() || null,
+    app1: (d.app1 || '').trim() || null, app2: (d.app2 || '').trim() || null, app3: (d.app3 || '').trim() || null,
+    commentaire: (d.commentaire || '').trim() || null,
   }));
   const { error } = await sb.from('evaluations').upsert(lignes, { onConflict: 'passage_id,stagiaire_id' });
   if (error) return toast(error.message, false);
@@ -1624,7 +1628,8 @@ function ongletValidation() {
     return `<tr><td><b>${esc(s.prenom)} ${esc(s.nom)}</b><br>
       <small class="${okMsp ? 'statut-valide' : 'statut-na'}">${nbPassages}/${S.formation.nb_msp_min} MSP évaluées</small>
       ${modeSansFaute ? `<br><small class="${mspComplexeSansFaute ? 'statut-valide' : 'statut-na'}">${mspComplexeSansFaute ? '✅ MSP complexe sans faute' : '❌ pas encore de MSP complexe sans faute'}</small>` : ''}<br>
-      <button class="btn petit secondaire" style="margin-top:4px" onclick="genererFicheSuivi(${s.id})">📄 Fiche PDF</button></td>${cellules}
+      <button class="btn petit secondaire" style="margin-top:4px" onclick="genererFicheSuivi(${s.id})">📄 Fiche PDF</button>
+      <button class="btn petit secondaire" style="margin-top:4px" onclick="genererLivretCertification(${s.id})">📘 Livret</button></td>${cellules}
       <td><select onchange="enregistrerDecisionJury(${s.id}, this.value)" style="width:auto">
         <option value="" ${dec === '' ? 'selected' : ''}>— À décider —</option>
         <option value="valide" ${dec === 'valide' ? 'selected' : ''}>✅ Validé</option>
