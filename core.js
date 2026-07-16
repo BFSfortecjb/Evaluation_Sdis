@@ -96,8 +96,8 @@ async function chargerProfil() {
   // sessions/CIS s'applique par défaut, sans quoi il n'aurait aucun effet (pas de case à cocher
   // pour eux pour le désactiver).
   S.omniscient = profil.role === 'gfor';
-  $('bandeau-user').textContent = profil.nom;
-  $('btn-logout').style.display = '';
+  if ($('bandeau-user')) $('bandeau-user').textContent = profil.nom;
+  if ($('btn-logout')) $('btn-logout').style.display = '';
   // Un rôle donne accès à sa vision et à celles en dessous
   const hierarchie = {
     gfor: ['gfor', 'rp', 'formateur', 'stagiaire'],
@@ -107,12 +107,18 @@ async function chargerProfil() {
   };
   const visions = hierarchie[profil.role] || [profil.role];
   const sel = $('sel-vision');
-  sel.innerHTML = visions.map(r => '<option value="' + r + '">Vision : ' + libelleRole(r) + '</option>').join('');
-  sel.style.display = visions.length > 1 ? '' : 'none';
+  // ⚠ Les éléments ci-dessous (sel-vision, lbl-omniscient, chk-omniscient) n'existent que si
+  // index.html a bien été ré-uploadé après leur ajout — on protège chaque accès pour qu'un
+  // décalage de déploiement (JS à jour, HTML pas encore ré-uploadé) ne fasse jamais planter
+  // toute l'appli (page blanche), seulement cette fonctionnalité précise.
+  if (sel) {
+    sel.innerHTML = visions.map(r => '<option value="' + r + '">Vision : ' + libelleRole(r) + '</option>').join('');
+    sel.style.display = visions.length > 1 ? '' : 'none';
+  }
   // « Vue globale » : réservé au GFor, permet de basculer entre voir toutes les sessions (dev/tests)
   // et ne voir que celles où l'on est réellement déclaré RP/Formateur (pour tester en conditions réelles).
-  $('lbl-omniscient').style.display = profil.role === 'gfor' ? '' : 'none';
-  $('chk-omniscient').checked = true;
+  if ($('lbl-omniscient')) $('lbl-omniscient').style.display = profil.role === 'gfor' ? '' : 'none';
+  if ($('chk-omniscient')) $('chk-omniscient').checked = true;
   // Un profil « stagiaire » pur (aucune qualification formateur/RP) atterrit directement sur
   // son propre parcours, sans tableau de bord d'encadrement.
   if (profil.role === 'stagiaire') ecranMonParcoursStagiaire();
@@ -131,11 +137,11 @@ function libelleRole(r) {
 async function logout() {
   await sb.auth.signOut();
   S.user = null; S.stagiaire = null; S.session = null; S.vision = null;
-  $('bandeau-user').textContent = '';
-  $('btn-logout').style.display = 'none';
-  $('sel-vision').style.display = 'none';
-  $('lbl-omniscient').style.display = 'none';
-  $('menu-gauche').style.display = 'none';
+  if ($('bandeau-user')) $('bandeau-user').textContent = '';
+  if ($('btn-logout')) $('btn-logout').style.display = 'none';
+  if ($('sel-vision')) $('sel-vision').style.display = 'none';
+  if ($('lbl-omniscient')) $('lbl-omniscient').style.display = 'none';
+  if ($('menu-gauche')) $('menu-gauche').style.display = 'none';
   show('ecran-login');
 }
 
@@ -176,8 +182,8 @@ async function entreeStagiaireCode() {
 
 async function entreeStagiaireNom(id) {
   S.stagiaire = window._stags.find(s => s.id === id);
-  $('bandeau-user').textContent = S.stagiaire.prenom + ' ' + S.stagiaire.nom + ' (stagiaire)';
-  $('btn-logout').style.display = '';
+  if ($('bandeau-user')) $('bandeau-user').textContent = S.stagiaire.prenom + ' ' + S.stagiaire.nom + ' (stagiaire)';
+  if ($('btn-logout')) $('btn-logout').style.display = '';
   ecranAccueilStagiaire(); // défini dans app.js
 }
 
