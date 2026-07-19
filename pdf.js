@@ -156,38 +156,59 @@ function _noteFormateurVersChiffre(note) {
   return null;
 }
 
-// Courbe à deux séries sur la même échelle 0-10 — sert à comparer, compétence par compétence
-// et MSP par MSP dans l'ordre chronologique de la semaine, l'auto-évaluation du stagiaire et
-// l'évaluation du formateur (convertie via _noteFormateurVersChiffre). Une valeur manquante sur
-// une série interrompt la ligne à cet endroit plutôt que d'interpoler ou de fausser la comparaison.
-function _pdfCourbeComparaison(doc, x, y, largeur, hauteur, serieStagiaire, serieFormateur, numerosMSP, max) {
+// Couleur imposée pour toute courbe d'évaluation formateur (constante dans tout le livret, pour
+// qu'un lecteur habitué au code couleur n'ait pas à re-vérifier la légende à chaque graphique).
+const ORANGE_FORMATEUR = [239, 108, 0];
+// Palette des courbes d'auto-évaluation stagiaire — une couleur par critère, jamais l'orange
+// (réservé au formateur), recyclée si une compétence a plus de critères que de couleurs.
+const COULEURS_STAGIAIRE = [[21, 101, 192], [46, 125, 50], [106, 27, 154], [0, 121, 107], [69, 90, 100], [173, 20, 87]];
+
+// Courbe à plusieurs séries sur la même échelle 0-10 — sert à comparer, compétence par
+// compétence et MSP par MSP dans l'ordre chronologique de la semaine, l'auto-évaluation du
+// stagiaire (une courbe par critère de la compétence, la moyenne seule ne suffit pas à voir le
+// détail) et l'évaluation du formateur pour la compétence entière (convertie via
+// _noteFormateurVersChiffre). Une valeur manquante sur une série interrompt la ligne à cet
+// endroit plutôt que d'interpoler ou de fausser la comparaison.
+function _pdfCourbeMultiple(doc, x, y, largeur, hauteur, series, numerosMSP, max) {
   doc.setDrawColor(200, 200, 200);
   doc.rect(x, y, largeur, hauteur);
   doc.setFontSize(5.5);
   doc.setTextColor(150, 150, 150);
   doc.text(String(max), x - 1, y + 3, { align: 'right' });
   doc.text('0', x - 1, y + hauteur, { align: 'right' });
-  const n = Math.max(serieStagiaire.length, serieFormateur.length);
-  if (n < 2) return;
+  const n = numerosMSP.length;
+  if (n < 2) { doc.setTextColor(30, 30, 30); return; }
   const px = i => x + (i / (n - 1)) * largeur;
   const py = v => y + hauteur - (Math.max(0, Math.min(max, v)) / max) * hauteur;
-  const tracer = (serie, couleur) => {
+  for (const s of series) {
     doc.setLineWidth(0.5);
-    for (let i = 0; i < serie.length - 1; i++) {
-      if (serie[i] == null || serie[i + 1] == null) continue;
-      doc.setDrawColor(...couleur);
-      doc.line(px(i), py(serie[i]), px(i + 1), py(serie[i + 1]));
+    for (let i = 0; i < s.valeurs.length - 1; i++) {
+      if (s.valeurs[i] == null || s.valeurs[i + 1] == null) continue;
+      doc.setDrawColor(...s.couleur);
+      doc.line(px(i), py(s.valeurs[i]), px(i + 1), py(s.valeurs[i + 1]));
     }
-    doc.setFillColor(...couleur);
-    serie.forEach((v, i) => { if (v != null) doc.circle(px(i), py(v), 0.8, 'F'); });
-  };
-  tracer(serieStagiaire, [21, 101, 192]); // bleu = auto-évaluation stagiaire
-  tracer(serieFormateur, ROUGE_SDIS);      // rouge = évaluation formateur
-  if (numerosMSP) {
-    doc.setFontSize(5);
-    doc.setTextColor(120, 120, 120);
-    numerosMSP.forEach((num, i) => { if (num != null) doc.text('MSP ' + num, px(i), y + hauteur + 4, { align: 'center' }); });
+    doc.setFillColor(...s.couleur);
+    s.valeurs.forEach((v, i) => { if (v != null) doc.circle(px(i), py(v), 0.8, 'F'); });
   }
+  doc.setFontSize(5);
+  doc.setTextColor(120, 120, 120);
+  numerosMSP.forEach((num, i) => { if (num != null) doc.text('MSP ' + num, px(i), y + hauteur + 4, { align: 'center' }); });
+  doc.setTextColor(30, 30, 30);
+}
+
+// Légende compacte en ligne (carré de couleur + libellé) pour une liste de séries — un critère
+// par courbe stagiaire plus « Formateur », affichée juste au-dessus de chaque graphique puisque
+// la composition change d'une compétence à l'autre (nombre de critères variable).
+function _pdfLegende(doc, x, y, items) {
+  doc.setFontSize(6);
+  let cx = x;
+  items.forEach(it => {
+    doc.setFillColor(...it.couleur);
+    doc.rect(cx, y - 2.3, 3, 3, 'F');
+    doc.setTextColor(...it.couleur);
+    doc.text(it.label, cx + 4, y);
+    cx += 4 + doc.getTextWidth(it.label) + 6;
+  });
   doc.setTextColor(30, 30, 30);
 }
 
@@ -382,22 +403,18 @@ async function genererLivretCertification(stagiaireId) {
   if (photo) { try { doc.addImage(photo.data, 'JPEG', enteteLargeur - 20, 26, 20, 20 * (photo.h / photo.w)); } catch (e) {} }
   y = 27;
   doc.setFontSize(7);
-  doc.setTextColor(21, 101, 192);
-  doc.text('— Auto-évaluation stagiaire', 14, y);
-  doc.setTextColor(...ROUGE_SDIS);
-  doc.text('— Évaluation formateur (A+ = 10, A = 7, ECA = 5, NA = 0)', 75, y);
   doc.setTextColor(120, 120, 120);
-  doc.text('échelle commune 0 à 10, un point par MSP dans l\'ordre chronologique', 205, y);
+  doc.text('Une courbe par critère d\'auto-évaluation du stagiaire, plus une courbe formateur (toujours en orange) pour la compétence entière — échelle commune 0 à 10 (A+ = 10, A = 7, ECA = 5, NA = 0), un point par MSP dans l\'ordre chronologique.', 14, y);
   doc.setTextColor(30, 30, 30);
   y += 6;
   const HAUTEUR_GRAPHE = 26;
   const BAS_PAGE = 185; // hauteur utile en paysage (page 210mm de haut, marge basse pour le pied de page)
   const numerosMSP = mesPassages.map(p => p.numero);
   for (const c of S.formation.competences) {
-    const critIds = S.formation.criteres.filter(cr => cr.competence_id === c.id).map(cr => cr.id);
-    if (!critIds.length) continue;
-    // Marge de sécurité généreuse (titre pouvant tenir sur 2 lignes + graphique + espacement).
-    if (y > BAS_PAGE - HAUTEUR_GRAPHE - 16) NOUVELLE_PAGE4();
+    const critList = S.formation.criteres.filter(cr => cr.competence_id === c.id).sort((a, b) => a.ordre - b.ordre);
+    if (!critList.length) continue;
+    // Marge de sécurité généreuse (titre + légende pouvant tenir sur plusieurs lignes + graphique).
+    if (y > BAS_PAGE - HAUTEUR_GRAPHE - 22) NOUVELLE_PAGE4();
     doc.setFontSize(9);
     doc.setTextColor(30, 30, 30);
     // Titre de compétence potentiellement long : on le passe sur plusieurs lignes plutôt que
@@ -406,17 +423,21 @@ async function genererLivretCertification(stagiaireId) {
     titreLignes.forEach((l, i) => doc.text(l, 14, y + i * 4));
     y += titreLignes.length * 4 + 2;
 
-    const serieStagiaire = mesPassages.map(p => {
-      const a = mesAutos(p.id);
-      if (!a) return null;
-      const valeurs = critIds.map(id => a.notes[id]).filter(v => v != null);
-      return valeurs.length ? valeurs.reduce((s, v) => s + v, 0) / valeurs.length : null;
-    });
-    const serieFormateur = mesPassages.map(p => {
-      const ev = mesEvals(p.id);
-      return ev ? _noteFormateurVersChiffre(ev.notes[c.id]) : null;
-    });
-    _pdfCourbeComparaison(doc, MARGE, y, CONTENU, HAUTEUR_GRAPHE, serieStagiaire, serieFormateur, numerosMSP, 10);
+    // Une courbe par critère (pas de moyenne : plusieurs critères d'auto-évaluation existent
+    // pour une seule courbe formateur, les fondre en une moyenne masquait le détail utile).
+    const seriesStagiaire = critList.map((cr, i) => ({
+      label: c.code + '.' + (i + 1),
+      couleur: COULEURS_STAGIAIRE[i % COULEURS_STAGIAIRE.length],
+      valeurs: mesPassages.map(p => { const a = mesAutos(p.id); return a ? a.notes[cr.id] : null; }),
+    }));
+    const serieFormateur = {
+      label: 'Formateur',
+      couleur: ORANGE_FORMATEUR,
+      valeurs: mesPassages.map(p => { const ev = mesEvals(p.id); return ev ? _noteFormateurVersChiffre(ev.notes[c.id]) : null; }),
+    };
+    _pdfLegende(doc, 14, y + 2, [...seriesStagiaire, serieFormateur]);
+    y += 6;
+    _pdfCourbeMultiple(doc, MARGE, y, CONTENU, HAUTEUR_GRAPHE, [...seriesStagiaire, serieFormateur], numerosMSP, 10);
     y += HAUTEUR_GRAPHE + 8;
   }
   if (y > BAS_PAGE - 45) NOUVELLE_PAGE4();
