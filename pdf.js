@@ -374,9 +374,11 @@ async function genererLivretCertification(stagiaireId) {
   // chronologique) l'auto-évaluation du stagiaire (moyenne de ses critères, déjà sur 0-10) et
   // l'évaluation du formateur pour cette compétence (A+/A/ECA/NA convertie sur la même échelle
   // 0-10, correspondance reprise du fichier Excel de traitement fourni par Jérémy).
-  const REPETER_ENTETE4 = () => { _pdfEnTete(doc, 'Tableau récapitulatif de suivi individuel', s.prenom + ' ' + s.nom); y = 30; };
-  doc.addPage();
-  REPETER_ENTETE4();
+  // ⚠ Doit toujours ouvrir une VRAIE nouvelle page avant de redessiner l'en-tête — un bug ici
+  // (en-tête redessiné sans addPage()) a provoqué un chevauchement de tout le contenu de la
+  // page 4 sur une seule page dans une version précédente.
+  const NOUVELLE_PAGE4 = () => { doc.addPage(); _pdfEnTete(doc, 'Tableau récapitulatif de suivi individuel', s.prenom + ' ' + s.nom); y = 30; };
+  NOUVELLE_PAGE4();
   if (photo) { try { doc.addImage(photo.data, 'JPEG', enteteLargeur - 20, 26, 20, 20 * (photo.h / photo.w)); } catch (e) {} }
   y = 27;
   doc.setFontSize(7);
@@ -394,7 +396,8 @@ async function genererLivretCertification(stagiaireId) {
   for (const c of S.formation.competences) {
     const critIds = S.formation.criteres.filter(cr => cr.competence_id === c.id).map(cr => cr.id);
     if (!critIds.length) continue;
-    if (y > BAS_PAGE - HAUTEUR_GRAPHE - 10) REPETER_ENTETE4();
+    // Marge de sécurité généreuse (titre pouvant tenir sur 2 lignes + graphique + espacement).
+    if (y > BAS_PAGE - HAUTEUR_GRAPHE - 16) NOUVELLE_PAGE4();
     doc.setFontSize(9);
     doc.setTextColor(30, 30, 30);
     // Titre de compétence potentiellement long : on le passe sur plusieurs lignes plutôt que
@@ -416,7 +419,7 @@ async function genererLivretCertification(stagiaireId) {
     _pdfCourbeComparaison(doc, MARGE, y, CONTENU, HAUTEUR_GRAPHE, serieStagiaire, serieFormateur, numerosMSP, 10);
     y += HAUTEUR_GRAPHE + 8;
   }
-  if (y > BAS_PAGE - 45) REPETER_ENTETE4();
+  if (y > BAS_PAGE - 45) NOUVELLE_PAGE4();
   y += 4;
   doc.setFontSize(10);
   doc.setTextColor(30, 30, 30);
