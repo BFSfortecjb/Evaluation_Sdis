@@ -814,6 +814,7 @@ function importerStagiaires(input) {
       const wb = XLSX.read(e.target.result, { type: 'array' });
       const lignes = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
       const norm = t => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      const { data: aptitudes } = await sb.from('aptitudes').select('*');
       const rows = [];
       for (const l of lignes) {
         const o = { session_id: S.session.id };
@@ -826,7 +827,14 @@ function importerStagiaires(input) {
         }
         // pas de doublon : on ignore les stagiaires déjà présents dans la session
         if (o.nom && o.prenom && !S.data.stagiaires.some(s =>
-          norm(s.nom + s.prenom) === norm(o.nom + o.prenom))) rows.push(o);
+          norm(s.nom + s.prenom) === norm(o.nom + o.prenom))) {
+          // Rattachement automatique à une fiche d'identité déjà connue (autre stage suivi, ou
+          // formateur) — récupère aussi sa photo commune sans action supplémentaire.
+          const apt = (aptitudes || []).find(a => o.matricule && a.matricule === o.matricule) ||
+            (aptitudes || []).find(a => norm(a.nom + a.prenom) === norm(o.nom + o.prenom));
+          if (apt) { o.aptitude_id = apt.id; if (apt.photo_url) o.photo_url = apt.photo_url; }
+          rows.push(o);
+        }
       }
       if (!rows.length) return toast('Aucune ligne exploitable ou stagiaires déjà tous présents', false);
       const { error } = await sb.from('stagiaires').insert(rows);
@@ -841,11 +849,16 @@ function importerStagiaires(input) {
 async function ajouterStagiaire() {
   const nom = $('st-nom').value.trim(), prenom = $('st-prenom').value.trim();
   if (!nom || !prenom) return toast('Nom et prénom requis', false);
-  const { error } = await sb.from('stagiaires').insert({
+  const matricule = $('st-mat').value.trim() || null;
+  const { data: nouveau, error } = await sb.from('stagiaires').insert({
     session_id: S.session.id, nom, prenom,
-    matricule: $('st-mat').value.trim() || null, cis: $('st-cis').value || null,
-  });
+    matricule, cis: $('st-cis').value || null,
+  }).select().single();
   if (error) return toast(error.message, false);
+  // Si cette personne a déjà une fiche d'identité (autre stage suivi, ou formateur), on la
+  // rattache automatiquement et on récupère sa photo commune sans action supplémentaire.
+  const apt = await _trouverAptitudeCorrespondante(nom, prenom, matricule);
+  if (apt) await sb.from('stagiaires').update({ aptitude_id: apt.id, photo_url: apt.photo_url || null }).eq('id', nouveau.id);
   await chargerDonneesSession(S.session.id); ongletStagiaires(); toast('Stagiaire ajouté');
 }
 
@@ -856,19 +869,66 @@ async function supprStagiaire(id) {
   await chargerDonneesSession(S.session.id); ongletStagiaires();
 }
 
+// ---------- Rapprochement avec l'identité stable (aptitudes) ----------
+// Une même personne physique a une ligne « stagiaire » par session mais une seule fiche
+// d'identité stable dans aptitudes. On la retrouve par matricule (fiable) ou à défaut par
+// nom+prénom, pour partager entre stages tout ce qui est propre à la personne (photo, historique).
+async function _trouverAptitudeCorrespondante(nom, prenom, matricule) {
+  const { data: candidats } = await sb.from('aptitudes').select('*');
+  if (!candidats) return null;
+  return candidats.find(a => matricule && a.matricule === matricule) ||
+    candidats.find(a => (a.nom + a.prenom).toLowerCase() === (nom + prenom).toLowerCase()) || null;
+}
+
+// Retourne l'aptitude déjà liée à ce stagiaire, ou la retrouve/la crée (même logique de
+// rapprochement que creerCompteStagiaire) — utilisé pour rattacher une photo sans forcément
+// passer par la création d'un compte de connexion.
+async function _resoudreOuCreerAptitude(s) {
+  if (s.aptitude_id) {
+    const { data } = await sb.from('aptitudes').select('*').eq('id', s.aptitude_id).maybeSingle();
+    if (data) return data;
+  }
+  const existant = await _trouverAptitudeCorrespondante(s.nom, s.prenom, s.matricule);
+  if (existant) {
+    if (!s.aptitude_id) await sb.from('stagiaires').update({ aptitude_id: existant.id }).eq('id', s.id);
+    return existant;
+  }
+  const { data: nouveau, error } = await sb.from('aptitudes').insert({
+    matricule: s.matricule || null, nom: s.nom, prenom: s.prenom, cis: s.cis || null,
+  }).select().single();
+  if (error) throw error;
+  await sb.from('stagiaires').update({ aptitude_id: nouveau.id }).eq('id', s.id);
+  return nouveau;
+}
+
 // ---------- Photo du stagiaire (bucket Supabase Storage « photos-stagiaires ») ----------
+// La photo est désormais rattachée à l'identité stable (aptitudes), commune à tous les stages
+// de la personne : un formateur qui met à jour la photo la met à jour partout, sans avoir à la
+// re-déposer à chaque nouveau stage.
 async function uploaderPhotoStagiaire(id, input) {
   const fichier = input.files[0];
   if (!fichier) return;
   if (fichier.size > 3 * 1024 * 1024) return toast('Photo trop lourde (3 Mo maximum)', false);
+  const s = S.data.stagiaires.find(x => x.id === id);
+  if (!s) return;
+  let apt;
+  try { apt = await _resoudreOuCreerAptitude(s); }
+  catch (err) { return toast('Rattachement identité impossible : ' + err.message, false); }
+
   const ext = (fichier.name.split('.').pop() || 'jpg').toLowerCase();
-  const chemin = id + '/' + Date.now() + '.' + ext;
+  const chemin = 'apt-' + apt.id + '/' + Date.now() + '.' + ext;
   const { error: eUp } = await sb.storage.from('photos-stagiaires').upload(chemin, fichier, { upsert: true });
   if (eUp) return toast('Envoi impossible : ' + eUp.message, false);
   const { data: pub } = sb.storage.from('photos-stagiaires').getPublicUrl(chemin);
-  const { error: eMaj } = await sb.from('stagiaires').update({ photo_url: pub.publicUrl }).eq('id', id);
+
+  const { error: eApt } = await sb.from('aptitudes').update({ photo_url: pub.publicUrl }).eq('id', apt.id);
+  if (eApt) return toast(eApt.message, false);
+  // Photo commune : répercutée sur tous les stages déjà enregistrés de cette personne, pas
+  // seulement la session en cours.
+  const { error: eMaj } = await sb.from('stagiaires').update({ photo_url: pub.publicUrl }).eq('aptitude_id', apt.id);
   if (eMaj) return toast(eMaj.message, false);
-  await chargerDonneesSession(S.session.id); ongletStagiaires(); toast('Photo enregistrée');
+  await chargerDonneesSession(S.session.id); ongletStagiaires();
+  toast('Photo enregistrée — commune à tous les stages de ' + s.prenom + ' ' + s.nom);
 }
 
 // ---------- Compte personnel du stagiaire ----------
@@ -932,6 +992,11 @@ async function creerCompteStagiaire(id) {
     }
     const { error: eLien } = await sb.from('stagiaires').update({ aptitude_id: aptitudeId }).eq('id', id);
     if (eLien) return toast(eLien.message, false);
+    // Photo commune : si l'identité retrouvée a déjà une photo (déposée lors d'un autre stage)
+    // et que ce stagiaire n'en a pas encore, on la récupère automatiquement.
+    if (existant && existant.photo_url && !s.photo_url) {
+      await sb.from('stagiaires').update({ photo_url: existant.photo_url }).eq('id', id);
+    }
   } else if (email) {
     await sb.from('aptitudes').update({ email }).eq('id', aptitudeId);
   }
@@ -976,13 +1041,36 @@ async function voirHistoriqueStagiaire(aptitudeId) {
         <b>${esc(p.sessions?.formations?.libelle || '?')}</b> — ${esc(p.sessions?.lieu || '')}
         <div class="info">${esc(p.sessions?.date_debut || '?')} → ${esc(p.sessions?.date_fin || '?')}
           ${p.decision_jury ? ' · Décision : ' + (p.decision_jury === 'valide' ? '✅ Validé' : '❌ Non validé') : ''}</div>
+        <button class="btn petit secondaire" style="margin-top:6px" onclick="event.stopPropagation(); genererLivretHistorique('${p.sessions?.id}', ${p.id}, this)">📘 Consulter le livret de ce stage</button>
       </div>`).join('');
   $('session-contenu').innerHTML = `<div class="carte">
     <span class="lien-retour" onclick="ongletStagiaires()">← Retour aux stagiaires</span>
     <h2>Historique des stages</h2>
-    <div class="info">Tous les stages suivis par cette personne, tous rôles confondus (formateur pouvant devenir stagiaire, etc.). Cliquer sur un stage l'ouvre.</div>
+    <div class="info">Tous les stages suivis par cette personne, tous rôles confondus (formateur pouvant devenir stagiaire, etc.). Cliquer sur un stage l'ouvre, ou télécharger directement son livret de certification pour voir comment il/elle s'en est sorti (difficultés, décision du jury…).</div>
     ${lignes || '<p class="info">Aucun autre stage enregistré.</p>'}
   </div>`;
+}
+
+// Génère le livret de certification d'un stage passé directement depuis l'historique multi-stages,
+// sans avoir à naviguer manuellement dans cette session (utile pour un formateur qui veut savoir
+// rapidement comment s'est passé un stage précédent — difficultés rencontrées, décision du jury…).
+// Recharge temporairement session/formation/données dans l'état global S, comme le ferait
+// ouvrirSession(), car genererLivretCertification() en dépend.
+async function genererLivretHistorique(sessionId, stagiaireId, bouton) {
+  if (!sessionId) return toast('Session introuvable', false);
+  if (bouton) { bouton.disabled = true; bouton.textContent = 'Génération…'; }
+  try {
+    const { data: sess, error } = await sb.from('sessions').select('*, formations(libelle)').eq('id', sessionId).single();
+    if (error) throw error;
+    S.session = sess;
+    await chargerFormation(sess.formation_id);
+    await chargerDonneesSession(sessionId);
+    await genererLivretCertification(stagiaireId);
+  } catch (err) {
+    toast('Livret impossible : ' + err.message, false);
+  } finally {
+    if (bouton) { bouton.disabled = false; bouton.textContent = '📘 Consulter le livret de ce stage'; }
+  }
 }
 
 // ---------- Mon parcours (stagiaire) — accessible à toute personne de la liste d'aptitude,
