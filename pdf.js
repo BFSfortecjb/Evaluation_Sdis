@@ -189,6 +189,18 @@ function _pdfCourbeMultiple(doc, x, y, largeur, hauteur, series, numerosMSP, max
     }
     doc.setFillColor(...s.couleur);
     s.valeurs.forEach((v, i) => { if (v != null) doc.circle(px(i), py(v), 0.8, 'F'); });
+    // Repère texte (court) au dernier point valide de chaque courbe : quand les critères
+    // d'auto-évaluation divergent, ça permet de voir directement sur le graphique lequel est en
+    // retrait, sans devoir recroiser les couleurs avec la légende.
+    if (s.court) {
+      for (let i = s.valeurs.length - 1; i >= 0; i--) {
+        if (s.valeurs[i] == null) continue;
+        doc.setFontSize(4);
+        doc.setTextColor(...s.couleur);
+        doc.text(s.court, px(i) + 1.5, py(s.valeurs[i]) + 1, { align: 'left' });
+        break;
+      }
+    }
   }
   // Juste le numéro (pas « MSP n° ») : les colonnes sont étroites, le préfixe complet
   // provoquerait des chevauchements entre repères successifs.
@@ -443,11 +455,13 @@ async function genererLivretCertification(stagiaireId) {
       // pour une seule courbe formateur, les fondre en une moyenne masquait le détail utile).
       const seriesStagiaire = inf.critList.map((cr, ci) => ({
         label: inf.c.code + '.' + (ci + 1),
+        court: String(ci + 1), // repère affiché directement sur le graphique, en bout de courbe
         couleur: COULEURS_STAGIAIRE[ci % COULEURS_STAGIAIRE.length],
         valeurs: mesPassages.map(p => { const a = mesAutos(p.id); return a ? a.notes[cr.id] : null; }),
       }));
       const serieFormateur = {
         label: 'Formateur',
+        court: 'F',
         couleur: ORANGE_FORMATEUR,
         valeurs: mesPassages.map(p => { const ev = mesEvals(p.id); return ev ? _noteFormateurVersChiffre(ev.notes[inf.c.id]) : null; }),
       };
