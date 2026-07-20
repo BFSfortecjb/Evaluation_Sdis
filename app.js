@@ -1660,13 +1660,17 @@ function bilanStagiaire(stagiaireId) {
 
   const bilan = {};
   for (const c of S.formation.competences) {
-    let acquis = 0, eca = 0, na = 0;
+    // aPlus/aSimple comptés séparément (affichage détaillé dans l'onglet Validation) ; acquis
+    // = les deux confondus, seule valeur utilisée par les règles de validation ci-dessous.
+    let aPlus = 0, aSimple = 0, eca = 0, na = 0;
     for (const ev of evals) {
       const n = ev.notes[c.id];
-      if (n === 'A' || n === 'A+') acquis++;
+      if (n === 'A+') aPlus++;
+      else if (n === 'A') aSimple++;
       else if (n === 'ECA') eca++;
       else if (n === 'NA') na++;
     }
+    const acquis = aPlus + aSimple;
     // Règle RIOFE : case grisée = « acquise » 2 fois ; case blanche = a minima ECA ;
     // au-delà des seuils NA/ECA réglés dans les Paramètres du stage, la validation relève de l'avis du jury.
     // (sauf mode_validation « msp_complexe_sans_faute », qui remplace entièrement cette logique)
@@ -1681,7 +1685,7 @@ function bilanStagiaire(stagiaireId) {
       statut = acquis > 0 || eca > 0 ? 'Validé' : (na > 0 ? 'Non acquis' : '—');
     }
     if (mspComplexeSansFaute === null && na === 1 && statut !== 'Validé' && statut !== 'Avis du jury') statut = 'Alerte NA';
-    bilan[c.id] = { acquis, eca, na, statut };
+    bilan[c.id] = { acquis, aPlus, aSimple, eca, na, statut };
   }
   return { bilan, nbPassages: evals.length, mspComplexeSansFaute };
 }
@@ -1744,7 +1748,10 @@ function ongletValidation() {
           <option value="valide" ${decComp === 'valide' ? 'selected' : ''}>✅ Validée</option>
           <option value="non_valide" ${decComp === 'non_valide' ? 'selected' : ''}>❌ Non validée</option>
         </select>` : '';
-      return `<td class="${cls}" title="acquis:${b.acquis} ECA:${b.eca} NA:${b.na}">${statutFinal}<br><small>${b.acquis}A/${b.eca}E/${b.na}N</small>${selecteurJury}</td>`;
+      // Détail des notes empilé verticalement (une ligne par catégorie) plutôt qu'un résumé
+      // horizontal type « 9A/1E/1N » : chaque ligne est plus courte, donc la colonne reste étroite.
+      return `<td class="${cls}" title="acquis:${b.acquis} ECA:${b.eca} NA:${b.na}">${statutFinal}<br>
+        <small>${b.aPlus} A+<br>${b.aSimple} A<br>${b.eca} ECA<br>${b.na} NA</small>${selecteurJury}</td>`;
     }).join('');
     const okMsp = nbPassages >= S.formation.nb_msp_min;
     const dec = s.decision_jury || '';
