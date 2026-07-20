@@ -60,9 +60,12 @@ function genererFicheSuivi(stagiaireId) {
 
   // ---- Tableau de validation des compétences (règle RIOFE) ----
   const { bilan, nbPassages } = bilanStagiaire(stagiaireId);
+  // Statut final : reprend le statut RIOFE brut, sauf pour une compétence en « Avis du jury »
+  // pour laquelle le jury a déjà tranché spécifiquement (indépendamment des autres compétences
+  // en avis du jury du même stagiaire) — voir _statutFinalCompetence dans app.js.
   const lignesComp = S.formation.competences.map(c => {
     const b = bilan[c.id];
-    return [c.code, c.libelle, c.grisee ? 'oui (x2)' : 'non (min. ECA)', b.acquis, b.eca, b.na, b.statut];
+    return [c.code, c.libelle, c.grisee ? 'oui (x2)' : 'non (min. ECA)', b.acquis, b.eca, b.na, _statutFinalCompetence(b.statut, s, c.id)];
   });
 
   doc.autoTable({
@@ -75,9 +78,10 @@ function genererFicheSuivi(stagiaireId) {
     didParseCell: (data) => {
       if (data.section === 'body' && data.column.index === 6) {
         const v = data.cell.raw;
-        if (v === 'Validé') data.cell.styles.textColor = [46, 125, 50];
-        else if (v === 'Alerte NA') data.cell.styles.textColor = [176, 0, 32];
+        if (v === 'Validé' || v === 'Validé (jury)') data.cell.styles.textColor = [46, 125, 50];
+        else if (v === 'Alerte NA' || v === 'Non validé (jury)') data.cell.styles.textColor = [176, 0, 32];
         else if (v === 'En cours') data.cell.styles.textColor = [239, 108, 0];
+        else if (v === 'Avis du jury') data.cell.styles.textColor = [106, 27, 154];
       }
     },
   });
@@ -370,7 +374,7 @@ async function genererLivretCertification(stagiaireId) {
       return n && n !== 'NE' ? n : (n === 'NE' ? 'N.É.' : '—');
     });
     const b = bilan[c.id];
-    return [c.code, ...cellules, b.statut];
+    return [c.code, ...cellules, _statutFinalCompetence(b.statut, s, c.id)];
   });
   doc.autoTable({
     startY: 28,
@@ -382,9 +386,9 @@ async function genererLivretCertification(stagiaireId) {
     didParseCell: (data) => {
       if (data.section === 'body' && data.column.index === enteteMSP.length - 1) {
         const v = data.cell.raw;
-        if (v === 'Validé') data.cell.styles.textColor = [46, 125, 50];
+        if (v === 'Validé' || v === 'Validé (jury)') data.cell.styles.textColor = [46, 125, 50];
         else if (v === 'Avis du jury') data.cell.styles.textColor = [106, 27, 154];
-        else if (v === 'Non acquis' || v === 'Alerte NA') data.cell.styles.textColor = [176, 0, 32];
+        else if (v === 'Non acquis' || v === 'Alerte NA' || v === 'Non validé (jury)') data.cell.styles.textColor = [176, 0, 32];
         else if (v === 'En cours') data.cell.styles.textColor = [239, 108, 0];
       }
     },
@@ -518,17 +522,22 @@ async function genererLivretCertification(stagiaireId) {
   }
   y += 42;
 
-  const lignesMots = mesPassages.map(p => {
-    const a = mesAutos(p.id);
-    return [p.numero, p.jour, a && a.ressenti ? a.ressenti : '—'];
-  });
-  if (lignesMots.length) {
+  // Tableau du ressenti stagiaire (mot), transposé à l'horizontale : une colonne par MSP,
+  // alignée sous la courbe de ressenti formateur juste au-dessus (même largeur pleine page,
+  // CONTENU) pour qu'on lise directement le mot du stagiaire en face du point de la courbe
+  // correspondant, plutôt qu'un tableau vertical décorrélé de la courbe.
+  if (mesPassages.length) {
     doc.autoTable({
       startY: y,
-      head: [['Passage n°', 'Jour', 'Ressenti stagiaire (mot)']],
-      body: lignesMots,
-      styles: { fontSize: 8, cellPadding: 1.5 },
-      headStyles: { fillColor: ROUGE_SDIS },
+      head: [mesPassages.map(p => 'MSP ' + p.numero)],
+      body: [mesPassages.map(p => {
+        const a = mesAutos(p.id);
+        return a && a.ressenti ? a.ressenti : '—';
+      })],
+      styles: { fontSize: 8, cellPadding: 2, halign: 'center' },
+      headStyles: { fillColor: ROUGE_SDIS, halign: 'center' },
+      margin: { left: 14, right: 14 },
+      tableWidth: CONTENU,
     });
   }
 

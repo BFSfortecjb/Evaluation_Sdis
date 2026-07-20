@@ -1599,11 +1599,31 @@ function _mspVueCas() {
 
 // ---------- Onglet Validation (règles RIOFE) ----------
 function classeStatutCompetence(statut) {
-  if (statut === 'Validé') return 'statut-valide';
+  if (statut === 'Validé' || statut === 'Validé (jury)') return 'statut-valide';
   if (statut === 'En cours') return 'statut-eca';
   if (statut === 'Avis du jury') return 'statut-jury';
+  if (statut === 'Non validé (jury)') return 'statut-na';
   if (statut === '—') return '';
   return 'statut-na';
+}
+
+// Décision du jury pour UNE compétence précise d'UN stagiaire (distincte de s.decision_jury,
+// qui est la décision finale globale du stage) — lue dans le jsonb {"<competence_id>": "valide"|"non_valide"}.
+function _decisionJuryComp(s, competenceId) {
+  const d = (s && s.decisions_jury_competences) || {};
+  return d[competenceId] || '';
+}
+
+// Statut final affiché pour une compétence : identique au statut RIOFE brut, sauf quand ce
+// statut brut est « Avis du jury » — dans ce cas, si le jury a déjà tranché pour CETTE
+// compétence précisément (indépendamment des autres compétences en avis du jury du même
+// stagiaire), on affiche le résultat de sa décision plutôt que « en attente ».
+function _statutFinalCompetence(statutBrut, s, competenceId) {
+  if (statutBrut !== 'Avis du jury') return statutBrut;
+  const dec = _decisionJuryComp(s, competenceId);
+  if (dec === 'valide') return 'Validé (jury)';
+  if (dec === 'non_valide') return 'Non validé (jury)';
+  return statutBrut;
 }
 
 function bilanStagiaire(stagiaireId) {
@@ -1708,8 +1728,20 @@ function ongletValidation() {
     const { bilan, nbPassages, mspComplexeSansFaute } = bilanStagiaire(s.id);
     const cellules = comps.map(c => {
       const b = bilan[c.id];
-      const cls = classeStatutCompetence(b.statut);
-      return `<td class="${cls}" title="acquis:${b.acquis} ECA:${b.eca} NA:${b.na}">${b.statut}<br><small>${b.acquis}A/${b.eca}E/${b.na}N</small></td>`;
+      // Quand cette compétence précise est en « Avis du jury » (trop de ECA/NA sur elle,
+      // indépendamment des autres compétences du même stagiaire), on affiche un sélecteur
+      // dédié pour trancher CETTE compétence — plusieurs compétences en avis du jury sur un
+      // même stagiaire peuvent être validées séparément, ce n'est pas une décision globale.
+      const statutFinal = _statutFinalCompetence(b.statut, s, c.id);
+      const cls = classeStatutCompetence(statutFinal);
+      const decComp = _decisionJuryComp(s, c.id);
+      const selecteurJury = b.statut === 'Avis du jury' ? `
+        <br><select onchange="enregistrerDecisionJuryCompetence(${s.id}, ${c.id}, this.value)" style="width:auto;font-size:10px;margin-top:2px" title="Décision du jury pour cette compétence précisément">
+          <option value="" ${decComp === '' ? 'selected' : ''}>— avis en attente —</option>
+          <option value="valide" ${decComp === 'valide' ? 'selected' : ''}>✅ Validée par le jury</option>
+          <option value="non_valide" ${decComp === 'non_valide' ? 'selected' : ''}>❌ Non validée par le jury</option>
+        </select>` : '';
+      return `<td class="${cls}" title="acquis:${b.acquis} ECA:${b.eca} NA:${b.na}">${statutFinal}<br><small>${b.acquis}A/${b.eca}E/${b.na}N</small>${selecteurJury}</td>`;
     }).join('');
     const okMsp = nbPassages >= S.formation.nb_msp_min;
     const dec = s.decision_jury || '';
@@ -1731,7 +1763,8 @@ function ongletValidation() {
       <div class="info">${modeSansFaute
         ? `Règle spécifique à cette formation : validation conditionnée à au moins une MSP « complexe » notée intégralement en A/A+ (aucune ECA/NA/NE), toutes compétences confondues. ${S.formation.nb_msp_min} MSP évaluées minimum par stagiaire.`
         : `Règle RIOFE : compétence grisée = « acquise » (A ou A+) 2 fois minimum · ${S.formation.nb_msp_min} MSP évaluées minimum par stagiaire. Détail par case : nb Acquis / ECA / NA.`}
-        La colonne « Décision jury » est la décision finale de la commission de certification.</div>
+        Quand une case passe en « Avis du jury » (trop de ECA/NA sur cette compétence précisément), un sélecteur apparaît directement dans la case pour trancher CETTE compétence — sur plusieurs avis du jury, certaines compétences peuvent être validées et d'autres non, indépendamment les unes des autres.
+        La colonne « Décision jury » à droite reste la décision finale globale de la commission de certification pour l'ensemble du stage.</div>
       <div class="table-scroll"><table>
         <tr><th>Stagiaire</th>${comps.map(c => `<th title="${esc(c.libelle)}">${esc(c.code)}</th>`).join('')}<th>Décision jury</th></tr>
         ${lignes}
@@ -1745,6 +1778,21 @@ async function enregistrerDecisionJury(stagiaireId, valeur) {
   const s = S.data.stagiaires.find(x => x.id === stagiaireId);
   if (s) s.decision_jury = valeur || null;
   toast('Décision enregistrée');
+}
+
+// Décision du jury pour UNE compétence précise (statut « Avis du jury »), indépendante de la
+// décision finale globale du stage ci-dessus — sur plusieurs avis du jury, chaque compétence
+// se tranche séparément.
+async function enregistrerDecisionJuryCompetence(stagiaireId, competenceId, valeur) {
+  const s = S.data.stagiaires.find(x => x.id === stagiaireId);
+  if (!s) return;
+  const decisions = { ...(s.decisions_jury_competences || {}) };
+  if (valeur) decisions[competenceId] = valeur; else delete decisions[competenceId];
+  const { error } = await sb.from('stagiaires').update({ decisions_jury_competences: decisions }).eq('id', stagiaireId);
+  if (error) return toast(error.message, false);
+  s.decisions_jury_competences = decisions;
+  toast('Décision jury enregistrée pour cette compétence');
+  ongletValidation();
 }
 
 // ---------- Onglet Comparatif auto-éval / éval formateur ----------
