@@ -702,18 +702,20 @@ async function creerSession() {
 // SESSION — chargement des données + onglets
 // ============================================================
 async function chargerDonneesSession(sessionId) {
-  const [stag, form, pass, equi, evals, autos] = await Promise.all([
+  const [stag, form, pass, equi, evals, autos, bilans] = await Promise.all([
     sb.from('stagiaires').select('*').eq('session_id', sessionId).order('nom'),
     sb.from('session_formateurs').select('*').eq('session_id', sessionId).order('nom'),
     sb.from('passages').select('*').eq('session_id', sessionId).order('numero'),
     sb.from('passage_equipiers').select('*, passages!inner(session_id)').eq('passages.session_id', sessionId),
     sb.from('evaluations').select('*, passages!inner(session_id)').eq('passages.session_id', sessionId),
     sb.from('autoevaluations').select('*, passages!inner(session_id)').eq('passages.session_id', sessionId),
+    sb.from('bilans_journaliers').select('*').eq('session_id', sessionId),
   ]);
-  for (const r of [stag, form, pass, equi, evals, autos]) if (r.error) throw r.error;
+  for (const r of [stag, form, pass, equi, evals, autos, bilans]) if (r.error) throw r.error;
   S.data = {
     stagiaires: stag.data, formateurs: form.data, passages: pass.data,
     equipiers: equi.data, evaluations: evals.data, autoevaluations: autos.data,
+    bilansJournaliers: bilans.data,
   };
 }
 
@@ -737,6 +739,7 @@ async function ouvrirSession(sessionId) {
     : [
         ['stagiaires', 'Stagiaires'], ['formateurs', 'Formateurs'], ['garde', 'Feuille de garde'],
         ['evaluations', 'Évaluations'], ['msp', 'Suivi MSP'], ['validation', 'Validation'], ['comparatif', 'Comparatif'],
+        ['bilanjour', 'Bilan journalier'],
       ];
   // Réglages du stage : réservés au RP et au GFor
   if (S.vision === 'rp' || S.vision === 'gfor') onglets.push(['parametres', 'Paramètres']);
@@ -751,7 +754,7 @@ function ongletSession(id) {
   $('ong-' + id).classList.add('actif');
   ({ stagiaires: ongletStagiaires, formateurs: ongletFormateurs, garde: ongletGarde,
      evaluations: ongletEvaluations, msp: ongletSuiviMSP, validation: ongletValidation, comparatif: ongletComparatif,
-     parametres: ongletParametresStage }[id])();
+     bilanjour: ongletBilanJournalier, parametres: ongletParametresStage }[id])();
 }
 
 // ---------- Onglet Stagiaires ----------
@@ -1394,6 +1397,7 @@ function formEvaluationPassage(passageId) {
       notes: existante ? { ...existante.notes } : {},
       app1: existante?.app1 || '', app2: existante?.app2 || '', app3: existante?.app3 || '',
       commentaire: existante?.commentaire || '',
+      ressenti_mot: existante?.ressenti_mot || '',
     };
     if (existante && existante.ressenti_formateur != null) ressentiExistant = existante.ressenti_formateur;
   }
@@ -1422,13 +1426,17 @@ function formEvaluationPassage(passageId) {
             </select>
           </div>`).join('')}
         </div>`).join('')}
-      <div class="section-titre" style="margin-top:16px">APP à proposer / Commentaire</div>
+      <div class="section-titre" style="margin-top:16px">APP à proposer / Commentaire / Mot (ressenti)</div>
       <div class="grille-eval-equipe">
         ${stags.map(s => `<div class="colonne-stag">
           <textarea placeholder="APP 1" oninput="_evalPassageCourante.parStagiaire[${s.id}].app1 = this.value">${esc(_evalPassageCourante.parStagiaire[s.id].app1)}</textarea>
           <textarea placeholder="APP 2" oninput="_evalPassageCourante.parStagiaire[${s.id}].app2 = this.value">${esc(_evalPassageCourante.parStagiaire[s.id].app2)}</textarea>
           <textarea placeholder="APP 3" oninput="_evalPassageCourante.parStagiaire[${s.id}].app3 = this.value">${esc(_evalPassageCourante.parStagiaire[s.id].app3)}</textarea>
           <textarea placeholder="Commentaire" oninput="_evalPassageCourante.parStagiaire[${s.id}].commentaire = this.value">${esc(_evalPassageCourante.parStagiaire[s.id].commentaire)}</textarea>
+          <input type="text" placeholder="Mot (ex. Efficace, Hésitant…)" maxlength="40"
+            title="Ressenti du formateur pour CE stagiaire, en un mot — distinct du ressenti chiffré ci-dessous qui vaut pour toute l'équipe"
+            value="${esc(_evalPassageCourante.parStagiaire[s.id].ressenti_mot)}"
+            oninput="_evalPassageCourante.parStagiaire[${s.id}].ressenti_mot = this.value">
         </div>`).join('')}
       </div>
       <label>Ressenti formateur (0 à 5, pour toute l'équipe de ce passage)</label>
@@ -1444,6 +1452,7 @@ async function enregistrerEvaluationPassage() {
     formateur: S.user ? S.user.nom : null, notes: d.notes, ressenti_formateur: ressenti,
     app1: (d.app1 || '').trim() || null, app2: (d.app2 || '').trim() || null, app3: (d.app3 || '').trim() || null,
     commentaire: (d.commentaire || '').trim() || null,
+    ressenti_mot: (d.ressenti_mot || '').trim() || null,
   }));
   const { error } = await sb.from('evaluations').upsert(lignes, { onConflict: 'passage_id,stagiaire_id' });
   if (error) return toast(error.message, false);
@@ -1985,6 +1994,65 @@ function _svgCourbeMultipleWeb(series, numerosMSP, max) {
   return svg;
 }
 
+// ---------- Onglet Bilan journalier (formateur/RP/GFor) ----------
+// Un bilan par stagiaire et par jour : 3 champs remplis par le stagiaire (lecture seule ici) +
+// une remarque formateur (éditable). Vue tabulaire pour repérer d'un coup d'œil qui a rempli
+// son bilan, plus un détail par stagiaire/jour pour lire et compléter.
+function ongletBilanJournalier() {
+  const jours = joursFormation();
+  const lignes = S.data.stagiaires.map(s => {
+    const cellules = jours.map(j => {
+      const b = (S.data.bilansJournaliers || []).find(x => x.stagiaire_id === s.id && x.jour === j);
+      const rempli = b && (b.jai_appris || b.jai_besoin || b.je_propose);
+      return `<td style="text-align:center;cursor:pointer" onclick="afficherBilanJournalierDetail(${s.id}, '${j}')">
+        ${rempli ? '✅' : '<span class="info">—</span>'}${b && b.remarque_formateur ? ' 💬' : ''}
+      </td>`;
+    }).join('');
+    return `<tr><td><b>${esc(s.prenom)} ${esc(s.nom)}</b></td>${cellules}</tr>`;
+  }).join('');
+
+  $('session-contenu').innerHTML = `
+    <div class="carte">
+      <h2>Bilan journalier</h2>
+      <div class="info">✅ = bilan rempli par le stagiaire pour ce jour · 💬 = remarque formateur déjà ajoutée. Clique sur une case pour lire le détail et ajouter/modifier la remarque formateur.</div>
+      <div class="table-scroll"><table>
+        <tr><th>Stagiaire</th>${jours.map(j => `<th>${j}</th>`).join('')}</tr>
+        ${lignes}
+      </table></div>
+      <div id="bilan-detail" style="margin-top:14px"></div>
+    </div>`;
+}
+
+function afficherBilanJournalierDetail(stagiaireId, jour) {
+  const s = S.data.stagiaires.find(x => x.id === stagiaireId);
+  const b = (S.data.bilansJournaliers || []).find(x => x.stagiaire_id === stagiaireId && x.jour === jour);
+  $('bilan-detail').innerHTML = `
+    <div class="carte" style="background:#f7f7f9">
+      <h3>${esc(s.prenom)} ${esc(s.nom)} — ${esc(jour)}</h3>
+      <label>J'ai appris et compris</label>
+      <p>${b && b.jai_appris ? esc(b.jai_appris) : '<span class="info">— non renseigné —</span>'}</p>
+      <label>J'ai besoin (d'approfondir, de compléter, de rechercher…)</label>
+      <p>${b && b.jai_besoin ? esc(b.jai_besoin) : '<span class="info">— non renseigné —</span>'}</p>
+      <label>Je propose (j'envisage de faire évoluer dans mes pratiques, dans mon organisation)</label>
+      <p>${b && b.je_propose ? esc(b.je_propose) : '<span class="info">— non renseigné —</span>'}</p>
+      <label>Remarque formateur</label>
+      <textarea id="bilan-detail-remarque">${esc(b && b.remarque_formateur || '')}</textarea>
+      <button class="btn" onclick="enregistrerRemarqueFormateurBilan(${stagiaireId}, '${jour}')">Enregistrer la remarque</button>
+    </div>`;
+}
+
+async function enregistrerRemarqueFormateurBilan(stagiaireId, jour) {
+  const remarque = $('bilan-detail-remarque').value.trim() || null;
+  const { error } = await sb.from('bilans_journaliers').upsert({
+    session_id: S.session.id, stagiaire_id: stagiaireId, jour, remarque_formateur: remarque,
+  }, { onConflict: 'stagiaire_id,jour' });
+  if (error) return toast(error.message, false);
+  await chargerDonneesSession(S.session.id);
+  toast('Remarque enregistrée');
+  ongletBilanJournalier();
+  afficherBilanJournalierDetail(stagiaireId, jour);
+}
+
 // ============================================================
 // CÔTÉ STAGIAIRE
 // ============================================================
@@ -2022,11 +2090,51 @@ async function ecranAccueilStagiaire() {
       <table><tr><th>Passage</th><th>Mot du formateur</th></tr>
         ${mesPassages.map(p => {
           const ev = S.data.evaluations.find(x => x.passage_id === p.id && x.stagiaire_id === stagiaireId);
-          return `<tr><td>MSP n°${p.numero}</td><td>${ev && ev.commentaire ? esc(ev.commentaire) : '—'}</td></tr>`;
+          return `<tr><td>MSP n°${p.numero}</td><td>${ev && ev.ressenti_mot ? esc(ev.ressenti_mot) : '—'}</td></tr>`;
         }).join('') || '<tr><td colspan="2" class="info">Aucun passage pour le moment.</td></tr>'}
       </table>
+    </div>
+    <div class="carte">
+      <h2>Bilan de fin de journée</h2>
+      <label>Jour</label>
+      <select id="bilan-jour" onchange="chargerBilanJourUI(this.value)">
+        ${joursFormation().map(j => `<option value="${j}">${j}</option>`).join('')}
+      </select>
+      <label>J'ai appris et compris</label>
+      <textarea id="bilan-appris"></textarea>
+      <label>J'ai besoin (d'approfondir, de compléter, de rechercher…)</label>
+      <textarea id="bilan-besoin"></textarea>
+      <label>Je propose (j'envisage de faire évoluer dans mes pratiques, dans mon organisation)</label>
+      <textarea id="bilan-propose"></textarea>
+      <button class="btn" onclick="enregistrerBilanJournalierStagiaire()">Enregistrer mon bilan</button>
+      <p class="info">Remarque du formateur pour ce jour : <span id="bilan-remarque-formateur">—</span></p>
     </div>`;
   show('ecran-stagiaire');
+  chargerBilanJourUI(joursFormation()[0]);
+}
+
+// Recharge les 3 champs du bilan du stagiaire (+ la remarque formateur en lecture seule) pour
+// le jour sélectionné — un bilan par jour, indépendant des autres jours de la même session.
+function chargerBilanJourUI(jour) {
+  const b = (S.data.bilansJournaliers || []).find(x => x.stagiaire_id === S.stagiaire.id && x.jour === jour);
+  $('bilan-appris').value = b?.jai_appris || '';
+  $('bilan-besoin').value = b?.jai_besoin || '';
+  $('bilan-propose').value = b?.je_propose || '';
+  $('bilan-remarque-formateur').textContent = b?.remarque_formateur || '—';
+}
+
+async function enregistrerBilanJournalierStagiaire() {
+  const jour = $('bilan-jour').value;
+  const { error } = await sb.from('bilans_journaliers').upsert({
+    session_id: S.session.id, stagiaire_id: S.stagiaire.id, jour,
+    jai_appris: $('bilan-appris').value.trim() || null,
+    jai_besoin: $('bilan-besoin').value.trim() || null,
+    je_propose: $('bilan-propose').value.trim() || null,
+  }, { onConflict: 'stagiaire_id,jour' });
+  if (error) return toast(error.message, false);
+  await chargerDonneesSession(S.session.id);
+  toast('Bilan enregistré');
+  chargerBilanJourUI(jour);
 }
 
 let _autoCourante = null;

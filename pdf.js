@@ -37,88 +37,233 @@ function _pdfPiedDePage(doc) {
 }
 
 // ---------- Fiche individuelle de suivi (livrables 1 & 5) ----------
-function genererFicheSuivi(stagiaireId) {
+// Fiche individuelle de suivi (livrables 1/5) — tableau de bord visuel sur le modèle Excel
+// fourni par Jérémy : en-tête + photo, un graphique par compétence (auto-éval par critère vs
+// formateur, MSP par MSP), courbe de ressenti formateur, tableau mots stagiaire/formateur,
+// retours par passage (sujet/commentaire/APP), matrice compétence × MSP, bilan journalier.
+// Format paysage comme le livret de certification — même raison : beaucoup de colonnes.
+async function genererFicheSuivi(stagiaireId) {
   if (!window.jspdf) return toast('Bibliothèque PDF non chargée', false);
   const s = S.data.stagiaires.find(x => x.id === stagiaireId);
   if (!s) return toast('Stagiaire introuvable', false);
+  toast('Génération de la fiche en cours…');
 
   const { jsPDF } = window.jspdf;
-  const doc = new jsPDF();
+  const doc = new jsPDF({ orientation: 'landscape' });
+  const MARGE = 14;
+  const CONTENU = doc.internal.pageSize.getWidth() - MARGE * 2;
+  const enteteLargeur = MARGE + CONTENU;
+  const TITRE = 'Fiche individuelle de suivi';
 
-  _pdfEnTete(doc, 'Fiche individuelle de suivi', S.formation.libelle + ' — ' + (S.session.lieu || ''));
-
-  doc.setTextColor(30, 30, 30);
-  doc.setFontSize(13);
-  doc.text(s.prenom + ' ' + s.nom, 14, 32);
-  doc.setFontSize(10);
-  doc.text([
-    'CIS de rattachement : ' + (s.cis || '—'),
-    'Matricule : ' + (s.matricule || '—'),
-    'Session : ' + (S.session.date_debut || '?') + ' au ' + (S.session.date_fin || '?') + ' — ' + (S.session.lieu || ''),
-    'Responsable pédagogique : ' + (S.session.responsable || '—'),
-  ], 14, 40);
-
-  // ---- Tableau de validation des compétences (règle RIOFE) ----
   const { bilan, nbPassages } = bilanStagiaire(stagiaireId);
-  // Statut final : reprend le statut RIOFE brut, sauf pour une compétence en « Avis du jury »
-  // pour laquelle le jury a déjà tranché spécifiquement (indépendamment des autres compétences
-  // en avis du jury du même stagiaire) — voir _statutFinalCompetence dans app.js.
-  const lignesComp = S.formation.competences.map(c => {
-    const b = bilan[c.id];
-    return [c.code, c.libelle, c.grisee ? 'oui (x2)' : 'non (min. ECA)', b.acquis, b.eca, b.na, _statutFinalCompetence(b.statut, s, c.id)];
-  });
-
-  doc.autoTable({
-    startY: 62,
-    head: [['Code', 'Compétence', 'Case grisée', 'Acquis', 'ECA', 'NA', 'Statut']],
-    body: lignesComp,
-    styles: { fontSize: 8, cellPadding: 2 },
-    headStyles: { fillColor: ROUGE_SDIS },
-    columnStyles: { 1: { cellWidth: 70 } },
-    didParseCell: (data) => {
-      if (data.section === 'body' && data.column.index === 6) {
-        const v = data.cell.raw;
-        if (v === 'Validé' || v === 'Validé (jury)') data.cell.styles.textColor = [46, 125, 50];
-        else if (v === 'Alerte NA' || v === 'Non validé (jury)') data.cell.styles.textColor = [176, 0, 32];
-        else if (v === 'En cours') data.cell.styles.textColor = [239, 108, 0];
-        else if (v === 'Avis du jury') data.cell.styles.textColor = [106, 27, 154];
-      }
-    },
-  });
-
-  let y = doc.lastAutoTable.finalY + 6;
-  doc.setFontSize(9);
-  doc.text(`${nbPassages} / ${S.formation.nb_msp_min} mises en situation évaluées.`, 14, y);
-  y += 4;
-  doc.setFontSize(8);
-  doc.setTextColor(100, 100, 100);
-  doc.text('Règle RIOFE : une compétence à case grisée doit être « acquise » (A ou A+) au moins 2 fois ; une case blanche', 14, y);
-  doc.text('doit être a minima « en cours d\'acquisition ». Une « non acquisition » en fin de formation entraîne la non-validation.', 14, y + 4);
-  doc.setTextColor(30, 30, 30);
-  y += 14;
-
-  // ---- Détail des passages : thème, évaluateur, ressenti stagiaire ----
   const mesPassages = S.data.passages
-    .filter(p => (S.data.equipiers || []).some(eq => eq.passage_id === p.id && eq.stagiaire_id === stagiaireId))
+    .filter(p => S.data.equipiers.some(e => e.passage_id === p.id && e.stagiaire_id === stagiaireId && e.evalue))
     .sort((a, b) => a.numero - b.numero);
+  const mesEvals = pid => S.data.evaluations.find(x => x.passage_id === pid && x.stagiaire_id === stagiaireId);
+  const mesAutos = pid => S.data.autoevaluations.find(x => x.passage_id === pid && x.stagiaire_id === stagiaireId);
+  const numerosMSP = mesPassages.map(p => p.numero);
+  const photo = await _pdfChargerImage(s.photo_url);
 
-  const lignesPassages = mesPassages.map(p => {
-    const auto = S.data.autoevaluations.find(a => a.passage_id === p.id && a.stagiaire_id === stagiaireId);
-    const th = S.formation.themes.find(t => t.id === p.theme_id);
-    return [p.numero, p.jour, th ? th.libelle : '—', p.sujet || '—', p.evaluateur || 'à affecter', auto ? (auto.ressenti || '—') : '—'];
+  // ---------- En-tête + identité + photo ----------
+  _pdfEnTete(doc, TITRE, S.formation.libelle + ' — ' + (S.session.lieu || ''));
+  if (photo) { try { doc.addImage(photo.data, 'JPEG', enteteLargeur - 20, 26, 20, 20 * (photo.h / photo.w)); } catch (e) {} }
+  let y = 30;
+  doc.setFontSize(13);
+  doc.setTextColor(30, 30, 30);
+  doc.text(s.prenom + ' ' + s.nom, 14, y);
+  y += 6;
+  doc.setFontSize(9);
+  doc.text([
+    'CIS de rattachement : ' + (s.cis || '—') + '    ·    Matricule : ' + (s.matricule || '—'),
+    'Session : ' + (S.session.date_debut || '?') + ' au ' + (S.session.date_fin || '?') + ' — ' + (S.session.lieu || ''),
+    'Responsable pédagogique : ' + (S.session.responsable || '—') + '    ·    ' + nbPassages + ' / ' + S.formation.nb_msp_min + ' mises en situation évaluées.',
+  ], 14, y);
+  y += 18;
+
+  const NOUVELLE_PAGE = () => { doc.addPage(); _pdfEnTete(doc, TITRE, s.prenom + ' ' + s.nom); y = 30; };
+  const BAS_PAGE = 185;
+
+  // ---------- Graphiques par compétence (identiques au livret : une courbe par critère
+  // d'auto-évaluation + une courbe formateur toujours en orange, légende avec libellé complet) ----------
+  doc.setFontSize(6.5);
+  doc.setTextColor(120, 120, 120);
+  doc.text('Une courbe par critère d\'auto-évaluation (légende avec libellé complet ci-dessous de chaque graphique), plus une courbe formateur (toujours en orange) — échelle 0 à 10 (A+ = 10, A = 7, ECA = 5, NA = 0), n° de MSP en abscisse.', 14, y);
+  doc.setTextColor(30, 30, 30);
+  y += 4;
+
+  const HAUTEUR_GRAPHE = 15;
+  const COL_GAP = 8;
+  const COL_LARGEUR = (CONTENU - COL_GAP) / 2;
+  const competencesAvecCriteres = S.formation.competences.filter(c =>
+    S.formation.criteres.some(cr => cr.competence_id === c.id));
+
+  for (let idx = 0; idx < competencesAvecCriteres.length; idx += 2) {
+    const paire = [competencesAvecCriteres[idx], competencesAvecCriteres[idx + 1]].filter(Boolean);
+    doc.setFontSize(6.5);
+    const infosPaire = paire.map(c => {
+      const critList = S.formation.criteres.filter(cr => cr.competence_id === c.id).sort((a, b) => a.ordre - b.ordre);
+      const seriesStagiaire = critList.map((cr, ci) => {
+        const code = c.code + '.' + (ci + 1);
+        return {
+          label: code + ' — ' + cr.libelle,
+          court: code,
+          couleur: COULEURS_STAGIAIRE[ci % COULEURS_STAGIAIRE.length],
+          valeurs: mesPassages.map(p => { const a = mesAutos(p.id); return a ? a.notes[cr.id] : null; }),
+        };
+      });
+      const serieFormateur = {
+        label: 'Formateur',
+        court: 'F',
+        couleur: ORANGE_FORMATEUR,
+        valeurs: mesPassages.map(p => { const ev = mesEvals(p.id); return ev ? _noteFormateurVersChiffre(ev.notes[c.id]) : null; }),
+      };
+      const toutesSeries = [...seriesStagiaire, serieFormateur];
+      return {
+        c,
+        titreLignes: doc.splitTextToSize(c.code + ' — ' + c.libelle, COL_LARGEUR),
+        toutesSeries,
+        hLegende: _pdfLegendeHauteur(doc, COL_LARGEUR, toutesSeries),
+      };
+    });
+    const hTitre = Math.max(...infosPaire.map(inf => inf.titreLignes.length)) * 3 + 1.5;
+    const hLegende = Math.max(...infosPaire.map(inf => inf.hLegende));
+    const hRow = hTitre + hLegende + HAUTEUR_GRAPHE + 6;
+    if (y > BAS_PAGE - hRow) NOUVELLE_PAGE();
+
+    infosPaire.forEach((inf, i) => {
+      const x0 = MARGE + i * (COL_LARGEUR + COL_GAP);
+      doc.setFontSize(6.5);
+      doc.setTextColor(30, 30, 30);
+      inf.titreLignes.forEach((l, li) => doc.text(l, x0, y + li * 3));
+      const yLegende = y + hTitre;
+      const yGraphe = _pdfLegende(doc, x0, yLegende, COL_LARGEUR, inf.toutesSeries) + 2;
+      _pdfCourbeMultiple(doc, x0, yGraphe, COL_LARGEUR, HAUTEUR_GRAPHE, inf.toutesSeries, numerosMSP, 10);
+    });
+    y += hRow;
+  }
+
+  // ---------- Courbe de ressenti formateur ----------
+  if (y > BAS_PAGE - 45) NOUVELLE_PAGE();
+  y += 4;
+  doc.setFontSize(10);
+  doc.setTextColor(30, 30, 30);
+  doc.text('Ressenti du formateur au fil des passages (échelle 0 à 10)', 14, y);
+  y += 3;
+  const ressentisData = mesPassages
+    .map(p => { const ev = mesEvals(p.id); return ev && ev.ressenti_formateur != null ? { v: ev.ressenti_formateur * 2, n: p.numero } : null; })
+    .filter(d => d != null);
+  const ressentis = ressentisData.map(d => d.v);
+  const ressentisNumeros = ressentisData.map(d => d.n);
+  if (ressentis.length >= 2) {
+    _pdfCourbe(doc, 14, y, CONTENU, 30, ressentis, 10, ressentisNumeros);
+  } else {
+    doc.setDrawColor(200, 200, 200);
+    doc.rect(14, y, CONTENU, 30);
+    doc.setFontSize(8);
+    doc.setTextColor(150, 150, 150);
+    doc.text(
+      'Pas assez de ressentis formateur renseignés pour tracer une courbe (' + ressentis.length + ' / ' + mesPassages.length + ' passages renseignés).',
+      18, y + 15, { maxWidth: CONTENU - 8 }
+    );
+    doc.setTextColor(30, 30, 30);
+  }
+  y += 42;
+
+  // ---------- Mots stagiaire / formateur, passage par passage ----------
+  if (y > BAS_PAGE - 20) NOUVELLE_PAGE();
+  const lignesMots = mesPassages.map(p => {
+    const auto = mesAutos(p.id);
+    const ev = mesEvals(p.id);
+    return [p.numero, p.jour, auto && auto.ressenti ? auto.ressenti : '—', ev && ev.ressenti_mot ? ev.ressenti_mot : '—'];
   });
-
-  if (lignesPassages.length) {
+  if (lignesMots.length) {
     doc.autoTable({
       startY: y,
-      head: [['Passage n°', 'Jour', 'Thème', 'Sujet', 'Évaluateur', 'Ressenti']],
-      body: lignesPassages,
+      head: [['Passage n°', 'Jour', 'Mot stagiaire', 'Mot formateur']],
+      body: lignesMots,
       styles: { fontSize: 8, cellPadding: 2 },
       headStyles: { fillColor: ROUGE_SDIS },
     });
+  }
+
+  // ---------- Page suivante : retours par mise en situation ----------
+  doc.addPage();
+  _pdfEnTete(doc, 'Retours par mise en situation', s.prenom + ' ' + s.nom);
+  const lignesApp = mesPassages.map(p => {
+    const ev = mesEvals(p.id);
+    return [p.numero, p.jour, p.sujet || '—', ev?.commentaire || '—', ev?.app1 || '—', ev?.app2 || '—', ev?.app3 || '—'];
+  });
+  doc.autoTable({
+    startY: 28,
+    head: [['MSP n°', 'Jour', 'Sujet', 'Commentaire', 'APP 1', 'APP 2', 'APP 3']],
+    body: lignesApp,
+    styles: { fontSize: 7, cellPadding: 1.5 },
+    headStyles: { fillColor: ROUGE_SDIS },
+  });
+  y = doc.lastAutoTable.finalY + 10;
+
+  // ---------- Matrice de suivi : note par compétence et par MSP ----------
+  if (y > BAS_PAGE - 40) { doc.addPage(); _pdfEnTete(doc, 'Matrice de suivi', s.prenom + ' ' + s.nom); y = 28; }
+  doc.setFontSize(10);
+  doc.setTextColor(30, 30, 30);
+  doc.text('Matrice de suivi — note par compétence et par MSP', 14, y);
+  y += 3;
+  const enteteMSP = ['Compétence', ...mesPassages.map(p => 'MSP n°' + p.numero), 'Statut'];
+  const corpsMSP = S.formation.competences.map(c => {
+    const cellules = mesPassages.map(p => {
+      const ev = mesEvals(p.id);
+      const n = ev ? ev.notes[c.id] : null;
+      return n && n !== 'NE' ? n : (n === 'NE' ? 'N.É.' : '—');
+    });
+    const b = bilan[c.id];
+    return [c.code, ...cellules, _statutFinalCompetence(b.statut, s, c.id)];
+  });
+  doc.autoTable({
+    startY: y,
+    head: [enteteMSP],
+    body: corpsMSP,
+    styles: { fontSize: 7, cellPadding: 1.5, halign: 'center' },
+    headStyles: { fillColor: ROUGE_SDIS },
+    columnStyles: { 0: { halign: 'left', cellWidth: 14 } },
+    didParseCell: (data) => {
+      if (data.section === 'body' && data.column.index === enteteMSP.length - 1) {
+        const v = data.cell.raw;
+        if (v === 'Validé' || v === 'Validé (jury)') data.cell.styles.textColor = [46, 125, 50];
+        else if (v === 'Avis du jury') data.cell.styles.textColor = [106, 27, 154];
+        else if (v === 'Non acquis' || v === 'Alerte NA' || v === 'Non validé (jury)') data.cell.styles.textColor = [176, 0, 32];
+        else if (v === 'En cours') data.cell.styles.textColor = [239, 108, 0];
+      }
+    },
+  });
+  y = doc.lastAutoTable.finalY + 8;
+  doc.setFontSize(8);
+  doc.setTextColor(100, 100, 100);
+  doc.text('Règle RIOFE : une compétence à case grisée doit être « acquise » (A ou A+) au moins 2 fois ; une case blanche doit être a minima « en cours d\'acquisition ». Une « non acquisition » en fin de formation entraîne la non-validation.', 14, y, { maxWidth: CONTENU });
+  doc.setTextColor(30, 30, 30);
+  y += 12;
+
+  // ---------- Bilan journalier (rempli par le stagiaire + remarque formateur) ----------
+  if (y > BAS_PAGE - 30) { doc.addPage(); _pdfEnTete(doc, 'Bilan journalier', s.prenom + ' ' + s.nom); y = 28; }
+  doc.setFontSize(10);
+  doc.text('Bilan de fin de journée', 14, y);
+  y += 3;
+  const lignesBilan = joursFormation()
+    .map(j => ({ j, b: (S.data.bilansJournaliers || []).find(x => x.stagiaire_id === stagiaireId && x.jour === j) }))
+    .filter(({ b }) => b && (b.jai_appris || b.jai_besoin || b.je_propose || b.remarque_formateur))
+    .map(({ j, b }) => [j, b.jai_appris || '—', b.jai_besoin || '—', b.je_propose || '—', b.remarque_formateur || '—']);
+  if (lignesBilan.length) {
+    doc.autoTable({
+      startY: y,
+      head: [['Jour', "J'ai appris et compris", "J'ai besoin (d'approfondir, de compléter, de rechercher…)", 'Je propose', 'Remarque formateur']],
+      body: lignesBilan,
+      styles: { fontSize: 7.5, cellPadding: 2 },
+      headStyles: { fillColor: ROUGE_SDIS },
+    });
   } else {
-    doc.setFontSize(9);
-    doc.text('Aucun passage enregistré pour ce stagiaire.', 14, y);
+    doc.setFontSize(8);
+    doc.setTextColor(150, 150, 150);
+    doc.text('Aucun bilan de fin de journée renseigné pour ce stagiaire.', 14, y + 6);
+    doc.setTextColor(30, 30, 30);
   }
 
   _pdfPiedDePage(doc);
