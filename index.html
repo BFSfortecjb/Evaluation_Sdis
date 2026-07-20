@@ -130,9 +130,17 @@
   /* Tableau Validation des compétences : colonnes étroites malgré le sélecteur d'avis du jury
      par compétence (sinon chaque case s'élargit au texte du menu déroulant et le tableau
      déborde beaucoup plus qu'avant l'ajout de ce sélecteur). */
-  .table-validation th, .table-validation td { font-size: 12px; padding: 5px 6px; }
-  .table-validation td:not(:first-child) { width: 1%; white-space: nowrap; }
-  .table-validation select.select-jury-comp { width: 100%; max-width: 84px; font-size: 10px; padding: 2px; margin-top: 3px; }
+  /* table-layout: fixed + largeurs explicites : sans ça chaque colonne de compétence prenait la
+     largeur de son contenu (variable selon le nombre de chiffres), donc des colonnes inégales
+     qui repoussaient la colonne « Décision jury » hors champ. Ici toutes les colonnes de
+     compétence ont la même largeur, réduite au minimum lisible. */
+  .table-validation { table-layout: fixed; }
+  .table-validation th, .table-validation td { font-size: 11px; padding: 4px 3px; overflow: hidden; }
+  .table-validation th:first-child, .table-validation td:first-child { width: 92px; font-size: 12px; }
+  .table-validation th:not(:first-child):not(:last-child),
+  .table-validation td:not(:first-child):not(:last-child) { width: 58px; text-align: center; }
+  .table-validation th:last-child, .table-validation td:last-child { width: 78px; }
+  .table-validation select.select-jury-comp { width: 100%; font-size: 9px; padding: 1px; margin-top: 3px; }
 
   /* Suivi MSP — grille compétence × MSP : colonnes de largeur fixe et égale */
   .table-msp-comp { table-layout: fixed; }
@@ -140,6 +148,15 @@
   .table-msp-comp th:not(:first-child):not(:last-child),
   .table-msp-comp td:not(:first-child):not(:last-child) { width: 30px; }
   .table-msp-comp th:last-child, .table-msp-comp td:last-child { width: 86px; white-space: normal; }
+
+  /* Comparatif — vue « Courbes » : une carte par compétence, empilée en une seule colonne
+     pleine largeur (plus lisible sur téléphone qu'une grille 2 colonnes façon PDF). Le SVG en
+     viewBox s'adapte à la largeur de l'écran sans JS supplémentaire au redimensionnement. */
+  .carte-courbe { border: 1px solid #eee; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+  .carte-courbe h4 { margin: 0 0 6px; font-size: 14px; color: var(--rouge); }
+  .svg-courbe { width: 100%; height: auto; display: block; }
+  .legende-courbe { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; font-weight: 600; margin-bottom: 6px; }
+  .pastille-courbe { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
 </style>
 </head>
 <body>
