@@ -138,9 +138,14 @@
   .table-validation th, .table-validation td { font-size: 11px; padding: 4px 3px; overflow: hidden; }
   .table-validation th:first-child, .table-validation td:first-child { width: 92px; font-size: 12px; }
   .table-validation th:not(:first-child):not(:last-child),
-  .table-validation td:not(:first-child):not(:last-child) { width: 58px; text-align: center; }
-  .table-validation th:last-child, .table-validation td:last-child { width: 78px; }
+  .table-validation td:not(:first-child):not(:last-child) { width: 62px; text-align: center; }
+  /* Dernière colonne (décision jury globale) plus large : un seul sélecteur par ligne, avec des
+     libellés plus longs ("— À décider —") qui étaient auparavant coupés dans une colonne trop
+     étroite. */
+  .table-validation th:last-child, .table-validation td:last-child { width: 118px; }
+  .table-validation select { max-width: 100%; text-overflow: ellipsis; }
   .table-validation select.select-jury-comp { width: 100%; font-size: 9px; padding: 1px; margin-top: 3px; }
+  .table-validation td:last-child select { width: 100%; font-size: 11px; padding: 3px; }
 
   /* Suivi MSP — grille compétence × MSP : colonnes de largeur fixe et égale */
   .table-msp-comp { table-layout: fixed; }

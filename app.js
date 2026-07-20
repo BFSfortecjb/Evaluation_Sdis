@@ -1744,9 +1744,9 @@ function ongletValidation() {
       // le plus long du menu déroulant et le tableau débordait bien plus qu'avant ce sélecteur.
       const selecteurJury = b.statut === 'Avis du jury' ? `
         <br><select class="select-jury-comp" onchange="enregistrerDecisionJuryCompetence(${s.id}, ${c.id}, this.value)" title="Décision du jury pour cette compétence précisément">
-          <option value="" ${decComp === '' ? 'selected' : ''}>— en attente —</option>
-          <option value="valide" ${decComp === 'valide' ? 'selected' : ''}>✅ Validée</option>
-          <option value="non_valide" ${decComp === 'non_valide' ? 'selected' : ''}>❌ Non validée</option>
+          <option value="" ${decComp === '' ? 'selected' : ''}>En attente</option>
+          <option value="valide" ${decComp === 'valide' ? 'selected' : ''}>✅ Val.</option>
+          <option value="non_valide" ${decComp === 'non_valide' ? 'selected' : ''}>❌ Refus.</option>
         </select>` : '';
       // Détail des notes empilé verticalement (une ligne par catégorie) plutôt qu'un résumé
       // horizontal type « 9A/1E/1N » : chaque ligne est plus courte, donc la colonne reste étroite.
@@ -1760,8 +1760,8 @@ function ongletValidation() {
       ${modeSansFaute ? `<br><small class="${mspComplexeSansFaute ? 'statut-valide' : 'statut-na'}">${mspComplexeSansFaute ? '✅ MSP complexe sans faute' : '❌ pas encore de MSP complexe sans faute'}</small>` : ''}<br>
       <button class="btn petit secondaire" style="margin-top:4px" onclick="genererFicheSuivi(${s.id})">📄 Fiche PDF</button>
       <button class="btn petit secondaire" style="margin-top:4px" onclick="genererLivretCertification(${s.id})">📘 Livret</button></td>${cellules}
-      <td><select onchange="enregistrerDecisionJury(${s.id}, this.value)" style="width:auto">
-        <option value="" ${dec === '' ? 'selected' : ''}>— À décider —</option>
+      <td><select onchange="enregistrerDecisionJury(${s.id}, this.value)">
+        <option value="" ${dec === '' ? 'selected' : ''}>À décider</option>
         <option value="valide" ${dec === 'valide' ? 'selected' : ''}>✅ Validé</option>
         <option value="non_valide" ${dec === 'non_valide' ? 'selected' : ''}>❌ Non validé</option>
       </select></td></tr>`;
@@ -1806,23 +1806,46 @@ async function enregistrerDecisionJuryCompetence(stagiaireId, competenceId, vale
 }
 
 // ---------- Onglet Comparatif auto-éval / éval formateur ----------
+// Deux vues au choix : « Tableau » (détail texte, compétence + critères, passage par passage)
+// et « Courbes » (une courbe par compétence, sur le modèle du livret de certification PDF,
+// mais en une seule colonne pleine largeur — plus lisible sur téléphone qu'une grille 2 colonnes).
+let _cmpVueActuelle = 'tableau';
+
 function ongletComparatif() {
   $('session-contenu').innerHTML = `
     <div class="carte">
       <h2>Comparatif auto-évaluation / évaluation formateur</h2>
       <label>Stagiaire</label>
-      <select id="cmp-stag" onchange="afficherComparatif(Number(this.value), 'cmp-zone')">
+      <select id="cmp-stag" onchange="_cmpRafraichir()">
         <option value="">— choisir —</option>
         ${S.data.stagiaires.map(s => `<option value="${s.id}">${esc(s.prenom)} ${esc(s.nom)}</option>`).join('')}
       </select>
+      <div class="onglets" style="margin-top:10px">
+        <button id="cmp-tab-tableau" class="actif" onclick="_cmpChangerVue('tableau')">📋 Tableau</button>
+        <button id="cmp-tab-courbe" onclick="_cmpChangerVue('courbe')">📈 Courbes</button>
+      </div>
       <div id="cmp-zone"></div>
     </div>`;
+  _cmpVueActuelle = 'tableau';
+}
+
+function _cmpChangerVue(mode) {
+  _cmpVueActuelle = mode;
+  $('cmp-tab-tableau').classList.toggle('actif', mode === 'tableau');
+  $('cmp-tab-courbe').classList.toggle('actif', mode === 'courbe');
+  _cmpRafraichir();
+}
+
+function _cmpRafraichir() {
+  const stagiaireId = Number($('cmp-stag').value) || null;
+  if (_cmpVueActuelle === 'courbe') afficherComparatifCourbe(stagiaireId, 'cmp-zone');
+  else afficherComparatif(stagiaireId, 'cmp-zone');
 }
 
 // Comparatif façon grille RIOFE (p.25) : chaque compétence avec sa note formateur (A+/A/ECA/NA)
 // et, juste en dessous, ses critères d'auto-évaluation rattachés (0 à 10), comme sur la fiche papier.
 function afficherComparatif(stagiaireId, zoneId) {
-  if (!stagiaireId) return;
+  if (!stagiaireId) { $(zoneId).innerHTML = ''; return; }
   const passages = S.data.equipiers
     .filter(e => e.stagiaire_id === stagiaireId)
     .map(e => S.data.passages.find(p => p.id === e.passage_id))
@@ -1858,6 +1881,103 @@ function afficherComparatif(stagiaireId, zoneId) {
       ${ev && ev.commentaire ? `<p class="info">« ${esc(ev.commentaire)} »</p>` : ''}`;
   }).join('');
   $(zoneId).innerHTML = blocs || '<p class="info">Aucune évaluation pour ce stagiaire.</p>';
+}
+
+// Vue graphique du comparatif : une courbe par compétence (une couleur par critère
+// d'auto-évaluation + une courbe formateur, toujours orange), sur le même principe que le
+// tableau récapitulatif du livret de certification PDF — mais en une seule colonne pleine
+// largeur (pas de grille 2 colonnes) pour rester lisible sur téléphone, et en SVG responsive
+// (viewBox, pas de largeur fixe en pixels) plutôt qu'en jsPDF puisqu'on est à l'écran.
+// Réutilise ORANGE_FORMATEUR / COULEURS_STAGIAIRE / _noteFormateurVersChiffre définis dans
+// pdf.js pour garder le même code couleur partout dans l'appli (web et PDF).
+function afficherComparatifCourbe(stagiaireId, zoneId) {
+  if (!stagiaireId) { $(zoneId).innerHTML = ''; return; }
+  const mesPassages = S.data.equipiers
+    .filter(e => e.stagiaire_id === stagiaireId && e.evalue)
+    .map(e => S.data.passages.find(p => p.id === e.passage_id))
+    .filter(Boolean).sort((a, b) => a.numero - b.numero);
+  const mesEvals = pid => S.data.evaluations.find(x => x.passage_id === pid && x.stagiaire_id === stagiaireId);
+  const mesAutos = pid => S.data.autoevaluations.find(x => x.passage_id === pid && x.stagiaire_id === stagiaireId);
+  const numerosMSP = mesPassages.map(p => p.numero);
+
+  if (numerosMSP.length < 2) {
+    $(zoneId).innerHTML = '<p class="info">Pas assez de mises en situation évaluées pour ce stagiaire pour tracer une courbe (2 minimum, ' + numerosMSP.length + ' actuellement).</p>';
+    return;
+  }
+
+  const competencesAvecCriteres = S.formation.competences.filter(c =>
+    S.formation.criteres.some(cr => cr.competence_id === c.id));
+
+  const cartes = competencesAvecCriteres.map(c => {
+    const critList = S.formation.criteres.filter(cr => cr.competence_id === c.id).sort((a, b) => a.ordre - b.ordre);
+    const seriesStagiaire = critList.map((cr, ci) => ({
+      code: c.code + '.' + (ci + 1),
+      couleur: COULEURS_STAGIAIRE[ci % COULEURS_STAGIAIRE.length],
+      valeurs: mesPassages.map(p => { const a = mesAutos(p.id); return a ? a.notes[cr.id] : null; }),
+    }));
+    const serieFormateur = {
+      code: 'Formateur',
+      couleur: ORANGE_FORMATEUR,
+      valeurs: mesPassages.map(p => { const ev = mesEvals(p.id); return ev ? _noteFormateurVersChiffre(ev.notes[c.id]) : null; }),
+    };
+    const toutes = [...seriesStagiaire, serieFormateur];
+    return `<div class="carte-courbe">
+      <h4>${esc(c.code)} — ${esc(c.libelle)}</h4>
+      ${_svgLegendeCourbe(toutes)}
+      ${_svgCourbeMultipleWeb(toutes, numerosMSP, 10)}
+    </div>`;
+  }).join('');
+
+  $(zoneId).innerHTML = `
+    <div class="info" style="margin-bottom:8px">Échelle 0 à 10 (A+ = 10, A = 7, ECA = 5, NA = 0) · n° de MSP en abscisse · courbe formateur toujours en orange.</div>
+    ${cartes || '<p class="info">Aucune compétence avec critères détaillés pour cette formation.</p>'}`;
+}
+
+function _svgLegendeCourbe(series) {
+  return `<div class="legende-courbe">${series.map(s =>
+    `<span style="color:rgb(${s.couleur.join(',')})"><span class="pastille-courbe" style="background:rgb(${s.couleur.join(',')})"></span>${esc(s.code)}</span>`
+  ).join('')}</div>`;
+}
+
+// SVG en viewBox (pas de taille fixe en px) : s'adapte à la largeur du conteneur, du téléphone
+// à l'écran large, sans recalcul JS ni redessin au resize.
+function _svgCourbeMultipleWeb(series, numerosMSP, max) {
+  const W = 320, H = 130, PAD_L = 20, PAD_R = 6, PAD_T = 8, PAD_B = 16;
+  const largeur = W - PAD_L - PAD_R, hauteur = H - PAD_T - PAD_B;
+  const n = numerosMSP.length;
+  const px = i => PAD_L + (i / (n - 1)) * largeur;
+  const py = v => PAD_T + hauteur - (Math.max(0, Math.min(max, v)) / max) * hauteur;
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" class="svg-courbe" preserveAspectRatio="xMidYMid meet">`;
+  svg += `<rect x="${PAD_L}" y="${PAD_T}" width="${largeur}" height="${hauteur}" fill="none" stroke="#ccc"/>`;
+  svg += `<text x="${PAD_L - 3}" y="${PAD_T + 6}" font-size="8" fill="#999" text-anchor="end">${max}</text>`;
+  svg += `<text x="${PAD_L - 3}" y="${PAD_T + hauteur}" font-size="8" fill="#999" text-anchor="end">0</text>`;
+
+  series.forEach(s => {
+    // Une valeur manquante coupe la ligne à cet endroit plutôt que d'interpoler ou de fausser
+    // la lecture — même logique que dans le PDF (_pdfCourbeMultiple).
+    let segs = [], cur = [];
+    s.valeurs.forEach((v, i) => {
+      if (v == null) { if (cur.length > 1) segs.push(cur); cur = []; return; }
+      cur.push([px(i), py(v)]);
+    });
+    if (cur.length > 1) segs.push(cur);
+    const couleur = 'rgb(' + s.couleur.join(',') + ')';
+    segs.forEach(seg => {
+      svg += `<polyline points="${seg.map(p => p.join(',')).join(' ')}" fill="none" stroke="${couleur}" stroke-width="1.8"/>`;
+    });
+    s.valeurs.forEach((v, i) => {
+      if (v == null) return;
+      svg += `<circle cx="${px(i)}" cy="${py(v)}" r="2.4" fill="${couleur}"/>`;
+    });
+  });
+
+  numerosMSP.forEach((num, i) => {
+    svg += `<text x="${px(i)}" y="${H - 3}" font-size="8" fill="#999" text-anchor="middle">${esc(String(num))}</text>`;
+  });
+
+  svg += `</svg>`;
+  return svg;
 }
 
 // ============================================================
