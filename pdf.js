@@ -398,11 +398,22 @@ async function genererLivretCertification(stagiaireId) {
   doc.text(nbPassages + ' / ' + S.formation.nb_msp_min + ' mises en situation évaluées.', 14, y);
   y += 12;
   const dec = s.decision_jury === 'valide' ? 'APTE' : s.decision_jury === 'non_valide' ? 'INAPTE' : '— à décider —';
+  const couleurDec = s.decision_jury === 'valide' ? [46, 125, 50] : s.decision_jury === 'non_valide' ? [200, 16, 46] : [120, 120, 120];
   doc.setFontSize(10);
+  doc.setTextColor(30, 30, 30);
   doc.text('Date : ' + new Date().toLocaleDateString('fr-FR'), 14, y);
   doc.text('Responsable pédagogique : ' + (S.session.responsable || '—'), 14, y + 7);
-  doc.text('Décision : ' + dec, 14, y + 14);
-  doc.text('Stagiaire : ' + s.prenom + ' ' + s.nom + '        Signature :', 14, y + 21);
+  // Décision très visible (gros, gras, couleur) — c'est l'information la plus importante de la
+  // page pour un lecteur qui la parcourt rapidement.
+  doc.text('Décision :', 14, y + 17);
+  doc.setFont(undefined, 'bold');
+  doc.setFontSize(20);
+  doc.setTextColor(...couleurDec);
+  doc.text(dec, 42, y + 18);
+  doc.setFont(undefined, 'normal');
+  doc.setFontSize(10);
+  doc.setTextColor(30, 30, 30);
+  doc.text('Stagiaire : ' + s.prenom + ' ' + s.nom + '        Signature :', 14, y + 28);
 
   // ---------- Page 4 : suivi individuel visuel ----------
   // Un graphique par compétence, comparant sur la semaine (une abscisse par MSP, dans l'ordre
@@ -416,14 +427,14 @@ async function genererLivretCertification(stagiaireId) {
   NOUVELLE_PAGE4();
   if (photo) { try { doc.addImage(photo.data, 'JPEG', enteteLargeur - 20, 26, 20, 20 * (photo.h / photo.w)); } catch (e) {} }
   y = 27;
-  doc.setFontSize(7);
+  doc.setFontSize(6.5);
   doc.setTextColor(120, 120, 120);
-  doc.text('Une courbe par critère d\'auto-évaluation du stagiaire, plus une courbe formateur (toujours en orange) pour la compétence entière — échelle commune 0 à 10 (A+ = 10, A = 7, ECA = 5, NA = 0), un point par MSP dans l\'ordre chronologique.', 14, y);
+  doc.text('Une courbe par critère d\'auto-évaluation (repère chiffré en bout de ligne, ex. 1.1/1.2 — voir référentiel p.2), plus une courbe formateur (toujours en orange) — échelle 0 à 10 (A+ = 10, A = 7, ECA = 5, NA = 0), n° de MSP en abscisse.', 14, y);
   doc.setTextColor(30, 30, 30);
-  y += 5;
-  // Deux colonnes pour tenir jusqu'à 8 graphiques par page (au lieu d'un seul par ligne en
-  // pleine largeur) et limiter le nombre de pages du livret.
-  const HAUTEUR_GRAPHE = 20;
+  y += 4;
+  // Deux colonnes, mise en page resserrée pour tenir les 8 compétences sur une seule page
+  // (au lieu d'un seul graphique par ligne en pleine largeur, qui en tenait 3 par page).
+  const HAUTEUR_GRAPHE = 15;
   const COL_GAP = 8;
   const COL_LARGEUR = (CONTENU - COL_GAP) / 2;
   const BAS_PAGE = 185; // hauteur utile en paysage (page 210mm de haut, marge basse pour le pied de page)
@@ -433,7 +444,7 @@ async function genererLivretCertification(stagiaireId) {
 
   for (let idx = 0; idx < competencesAvecCriteres.length; idx += 2) {
     const paire = [competencesAvecCriteres[idx], competencesAvecCriteres[idx + 1]].filter(Boolean);
-    doc.setFontSize(7.5);
+    doc.setFontSize(6.5);
     const infosPaire = paire.map(c => ({
       c,
       critList: S.formation.criteres.filter(cr => cr.competence_id === c.id).sort((a, b) => a.ordre - b.ordre),
@@ -441,24 +452,29 @@ async function genererLivretCertification(stagiaireId) {
     }));
     // Hauteur de ligne alignée sur la colonne au titre le plus long, pour que les deux
     // graphiques d'une même rangée démarrent à la même hauteur.
-    const hTitre = Math.max(...infosPaire.map(inf => inf.titreLignes.length)) * 3.4 + 2;
-    const hRow = hTitre + 5 + HAUTEUR_GRAPHE + 4 + 5;
+    const hTitre = Math.max(...infosPaire.map(inf => inf.titreLignes.length)) * 3 + 1.5;
+    const hRow = hTitre + 3.5 + HAUTEUR_GRAPHE + 5;
     if (y > BAS_PAGE - hRow) NOUVELLE_PAGE4();
 
     infosPaire.forEach((inf, i) => {
       const x0 = MARGE + i * (COL_LARGEUR + COL_GAP);
-      doc.setFontSize(7.5);
+      doc.setFontSize(6.5);
       doc.setTextColor(30, 30, 30);
-      inf.titreLignes.forEach((l, li) => doc.text(l, x0, y + li * 3.4));
+      inf.titreLignes.forEach((l, li) => doc.text(l, x0, y + li * 3));
 
       // Une courbe par critère (pas de moyenne : plusieurs critères d'auto-évaluation existent
       // pour une seule courbe formateur, les fondre en une moyenne masquait le détail utile).
-      const seriesStagiaire = inf.critList.map((cr, ci) => ({
-        label: inf.c.code + '.' + (ci + 1),
-        court: String(ci + 1), // repère affiché directement sur le graphique, en bout de courbe
-        couleur: COULEURS_STAGIAIRE[ci % COULEURS_STAGIAIRE.length],
-        valeurs: mesPassages.map(p => { const a = mesAutos(p.id); return a ? a.notes[cr.id] : null; }),
-      }));
+      // Repère en bout de courbe = code complet du critère (ex. « 1.1 », « 1.2 »), pas juste un
+      // numéro isolé, pour qu'on sache directement à quoi ça correspond sans revenir au référentiel.
+      const seriesStagiaire = inf.critList.map((cr, ci) => {
+        const code = inf.c.code + '.' + (ci + 1);
+        return {
+          label: code,
+          court: code, // code complet affiché sur le graphique (ex. « C1.1 »), pas juste un chiffre isolé
+          couleur: COULEURS_STAGIAIRE[ci % COULEURS_STAGIAIRE.length],
+          valeurs: mesPassages.map(p => { const a = mesAutos(p.id); return a ? a.notes[cr.id] : null; }),
+        };
+      });
       const serieFormateur = {
         label: 'Formateur',
         court: 'F',
