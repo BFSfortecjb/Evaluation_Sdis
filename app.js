@@ -1735,11 +1735,14 @@ function ongletValidation() {
       const statutFinal = _statutFinalCompetence(b.statut, s, c.id);
       const cls = classeStatutCompetence(statutFinal);
       const decComp = _decisionJuryComp(s, c.id);
+      // Sélecteur volontairement compact (classe .select-jury-comp, largeur bridée en CSS) :
+      // avec des libellés complets et une largeur "auto", chaque case s'élargissait au texte
+      // le plus long du menu déroulant et le tableau débordait bien plus qu'avant ce sélecteur.
       const selecteurJury = b.statut === 'Avis du jury' ? `
-        <br><select onchange="enregistrerDecisionJuryCompetence(${s.id}, ${c.id}, this.value)" style="width:auto;font-size:10px;margin-top:2px" title="Décision du jury pour cette compétence précisément">
-          <option value="" ${decComp === '' ? 'selected' : ''}>— avis en attente —</option>
-          <option value="valide" ${decComp === 'valide' ? 'selected' : ''}>✅ Validée par le jury</option>
-          <option value="non_valide" ${decComp === 'non_valide' ? 'selected' : ''}>❌ Non validée par le jury</option>
+        <br><select class="select-jury-comp" onchange="enregistrerDecisionJuryCompetence(${s.id}, ${c.id}, this.value)" title="Décision du jury pour cette compétence précisément">
+          <option value="" ${decComp === '' ? 'selected' : ''}>— en attente —</option>
+          <option value="valide" ${decComp === 'valide' ? 'selected' : ''}>✅ Validée</option>
+          <option value="non_valide" ${decComp === 'non_valide' ? 'selected' : ''}>❌ Non validée</option>
         </select>` : '';
       return `<td class="${cls}" title="acquis:${b.acquis} ECA:${b.eca} NA:${b.na}">${statutFinal}<br><small>${b.acquis}A/${b.eca}E/${b.na}N</small>${selecteurJury}</td>`;
     }).join('');
@@ -1765,7 +1768,7 @@ function ongletValidation() {
         : `Règle RIOFE : compétence grisée = « acquise » (A ou A+) 2 fois minimum · ${S.formation.nb_msp_min} MSP évaluées minimum par stagiaire. Détail par case : nb Acquis / ECA / NA.`}
         Quand une case passe en « Avis du jury » (trop de ECA/NA sur cette compétence précisément), un sélecteur apparaît directement dans la case pour trancher CETTE compétence — sur plusieurs avis du jury, certaines compétences peuvent être validées et d'autres non, indépendamment les unes des autres.
         La colonne « Décision jury » à droite reste la décision finale globale de la commission de certification pour l'ensemble du stage.</div>
-      <div class="table-scroll"><table>
+      <div class="table-scroll"><table class="table-validation">
         <tr><th>Stagiaire</th>${comps.map(c => `<th title="${esc(c.libelle)}">${esc(c.code)}</th>`).join('')}<th>Décision jury</th></tr>
         ${lignes}
       </table></div>

@@ -127,6 +127,13 @@
   .table-compacte .niv { padding: 1px 4px; font-size: 10px; border-radius: 4px; }
   .table-compacte .code { font-size: 10px; }
 
+  /* Tableau Validation des compétences : colonnes étroites malgré le sélecteur d'avis du jury
+     par compétence (sinon chaque case s'élargit au texte du menu déroulant et le tableau
+     déborde beaucoup plus qu'avant l'ajout de ce sélecteur). */
+  .table-validation th, .table-validation td { font-size: 12px; padding: 5px 6px; }
+  .table-validation td:not(:first-child) { width: 1%; white-space: nowrap; }
+  .table-validation select.select-jury-comp { width: 100%; max-width: 84px; font-size: 10px; padding: 2px; margin-top: 3px; }
+
   /* Suivi MSP — grille compétence × MSP : colonnes de largeur fixe et égale */
   .table-msp-comp { table-layout: fixed; }
   .table-msp-comp th:first-child, .table-msp-comp td:first-child { width: 32px; }
@@ -168,10 +175,9 @@
       <input id="login-mdp" type="password" autocomplete="current-password">
       <button class="btn" onclick="loginStaff()">Se connecter</button>
       <div style="margin-top:12px">
-        <span class="lien-retour" onclick="creerCompte()">Première connexion ? Créer mon compte</span><br>
         <span class="lien-retour" onclick="motDePasseOublie()">Mot de passe oublié ?</span>
       </div>
-      <p class="info">La création de compte est réservée aux personnes inscrites sur la liste d'aptitude par le GFor (même adresse email).</p>
+      <p class="info">Les comptes sont créés par le GFor depuis la liste d'aptitude. Si tu n'as pas encore de compte ou de mot de passe, contacte le GFor.</p>
     </div>
   </section>
 
