@@ -1912,11 +1912,13 @@ function afficherComparatifCourbe(stagiaireId, zoneId) {
     const critList = S.formation.criteres.filter(cr => cr.competence_id === c.id).sort((a, b) => a.ordre - b.ordre);
     const seriesStagiaire = critList.map((cr, ci) => ({
       code: c.code + '.' + (ci + 1),
+      libelle: cr.libelle, // libellé complet du critère, affiché dans la légende (le code seul ne dit rien sans revenir au référentiel)
       couleur: COULEURS_STAGIAIRE[ci % COULEURS_STAGIAIRE.length],
       valeurs: mesPassages.map(p => { const a = mesAutos(p.id); return a ? a.notes[cr.id] : null; }),
     }));
     const serieFormateur = {
       code: 'Formateur',
+      libelle: '',
       couleur: ORANGE_FORMATEUR,
       valeurs: mesPassages.map(p => { const ev = mesEvals(p.id); return ev ? _noteFormateurVersChiffre(ev.notes[c.id]) : null; }),
     };
@@ -1933,9 +1935,12 @@ function afficherComparatifCourbe(stagiaireId, zoneId) {
     ${cartes || '<p class="info">Aucune compétence avec critères détaillés pour cette formation.</p>'}`;
 }
 
+// Une ligne par série (code en gras + libellé complet du critère) plutôt qu'une légende en
+// ligne avec juste le code — sans le libellé, impossible de savoir à quoi correspond « C1.1 »
+// sans revenir chercher dans le référentiel.
 function _svgLegendeCourbe(series) {
   return `<div class="legende-courbe">${series.map(s =>
-    `<span style="color:rgb(${s.couleur.join(',')})"><span class="pastille-courbe" style="background:rgb(${s.couleur.join(',')})"></span>${esc(s.code)}</span>`
+    `<div class="item-legende-courbe" style="color:rgb(${s.couleur.join(',')})"><span class="pastille-courbe" style="background:rgb(${s.couleur.join(',')})"></span><b>${esc(s.code)}</b>${s.libelle ? ' — ' + esc(s.libelle) : ''}</div>`
   ).join('')}</div>`;
 }
 

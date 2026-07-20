@@ -214,20 +214,30 @@ function _pdfCourbeMultiple(doc, x, y, largeur, hauteur, series, numerosMSP, max
   doc.setTextColor(30, 30, 30);
 }
 
-// Légende compacte en ligne (carré de couleur + libellé) pour une liste de séries — un critère
-// par courbe stagiaire plus « Formateur », affichée juste au-dessus de chaque graphique puisque
-// la composition change d'une compétence à l'autre (nombre de critères variable).
-function _pdfLegende(doc, x, y, items) {
+// Légende empilée verticalement (carré de couleur + code + LIBELLÉ COMPLET du critère), une
+// ligne par série — remplace l'ancienne légende en ligne qui n'affichait que le code (« C1.1 »),
+// illisible sans revenir chercher sa signification dans le référentiel p.2. Repliée sur
+// plusieurs lignes via splitTextToSize si un libellé est trop long pour la largeur de colonne.
+function _pdfLegendeHauteur(doc, largeur, items) {
   doc.setFontSize(6);
-  let cx = x;
+  let h = 0;
+  items.forEach(it => { h += doc.splitTextToSize(it.label, largeur - 5).length * 2.6; });
+  return h;
+}
+
+function _pdfLegende(doc, x, y, largeur, items) {
+  doc.setFontSize(6);
+  let cy = y;
   items.forEach(it => {
+    const lignes = doc.splitTextToSize(it.label, largeur - 5);
     doc.setFillColor(...it.couleur);
-    doc.rect(cx, y - 2.3, 3, 3, 'F');
+    doc.rect(x, cy - 2, 2, 2, 'F');
     doc.setTextColor(...it.couleur);
-    doc.text(it.label, cx + 4, y);
-    cx += 4 + doc.getTextWidth(it.label) + 6;
+    lignes.forEach((l, li) => doc.text(l, x + 3.5, cy + li * 2.6));
+    cy += lignes.length * 2.6;
   });
   doc.setTextColor(30, 30, 30);
+  return cy;
 }
 
 // Courbe (ligne brisée) pour le ressenti formateur au fil des passages, avec repères d'échelle
@@ -433,7 +443,7 @@ async function genererLivretCertification(stagiaireId) {
   y = 27;
   doc.setFontSize(6.5);
   doc.setTextColor(120, 120, 120);
-  doc.text('Une courbe par critère d\'auto-évaluation (repère chiffré en bout de ligne, ex. 1.1/1.2 — voir référentiel p.2), plus une courbe formateur (toujours en orange) — échelle 0 à 10 (A+ = 10, A = 7, ECA = 5, NA = 0), n° de MSP en abscisse.', 14, y);
+  doc.text('Une courbe par critère d\'auto-évaluation (légende avec libellé complet ci-dessous de chaque graphique), plus une courbe formateur (toujours en orange) — échelle 0 à 10 (A+ = 10, A = 7, ECA = 5, NA = 0), n° de MSP en abscisse.', 14, y);
   doc.setTextColor(30, 30, 30);
   y += 4;
   // Deux colonnes, mise en page resserrée pour tenir les 8 compétences sur une seule page
@@ -449,32 +459,17 @@ async function genererLivretCertification(stagiaireId) {
   for (let idx = 0; idx < competencesAvecCriteres.length; idx += 2) {
     const paire = [competencesAvecCriteres[idx], competencesAvecCriteres[idx + 1]].filter(Boolean);
     doc.setFontSize(6.5);
-    const infosPaire = paire.map(c => ({
-      c,
-      critList: S.formation.criteres.filter(cr => cr.competence_id === c.id).sort((a, b) => a.ordre - b.ordre),
-      titreLignes: doc.splitTextToSize(c.code + ' — ' + c.libelle, COL_LARGEUR),
-    }));
-    // Hauteur de ligne alignée sur la colonne au titre le plus long, pour que les deux
-    // graphiques d'une même rangée démarrent à la même hauteur.
-    const hTitre = Math.max(...infosPaire.map(inf => inf.titreLignes.length)) * 3 + 1.5;
-    const hRow = hTitre + 3.5 + HAUTEUR_GRAPHE + 5;
-    if (y > BAS_PAGE - hRow) NOUVELLE_PAGE4();
-
-    infosPaire.forEach((inf, i) => {
-      const x0 = MARGE + i * (COL_LARGEUR + COL_GAP);
-      doc.setFontSize(6.5);
-      doc.setTextColor(30, 30, 30);
-      inf.titreLignes.forEach((l, li) => doc.text(l, x0, y + li * 3));
-
+    const infosPaire = paire.map(c => {
+      const critList = S.formation.criteres.filter(cr => cr.competence_id === c.id).sort((a, b) => a.ordre - b.ordre);
       // Une courbe par critère (pas de moyenne : plusieurs critères d'auto-évaluation existent
       // pour une seule courbe formateur, les fondre en une moyenne masquait le détail utile).
-      // Repère en bout de courbe = code complet du critère (ex. « 1.1 », « 1.2 »), pas juste un
-      // numéro isolé, pour qu'on sache directement à quoi ça correspond sans revenir au référentiel.
-      const seriesStagiaire = inf.critList.map((cr, ci) => {
-        const code = inf.c.code + '.' + (ci + 1);
+      // label = code + LIBELLÉ COMPLET (affiché dans la légende ci-dessous du graphique) ;
+      // court = juste le code, affiché en bout de courbe (repère rapide sans encombrer le graphique).
+      const seriesStagiaire = critList.map((cr, ci) => {
+        const code = c.code + '.' + (ci + 1);
         return {
-          label: code,
-          court: code, // code complet affiché sur le graphique (ex. « C1.1 »), pas juste un chiffre isolé
+          label: code + ' — ' + cr.libelle,
+          court: code,
           couleur: COULEURS_STAGIAIRE[ci % COULEURS_STAGIAIRE.length],
           valeurs: mesPassages.map(p => { const a = mesAutos(p.id); return a ? a.notes[cr.id] : null; }),
         };
@@ -483,16 +478,78 @@ async function genererLivretCertification(stagiaireId) {
         label: 'Formateur',
         court: 'F',
         couleur: ORANGE_FORMATEUR,
-        valeurs: mesPassages.map(p => { const ev = mesEvals(p.id); return ev ? _noteFormateurVersChiffre(ev.notes[inf.c.id]) : null; }),
+        valeurs: mesPassages.map(p => { const ev = mesEvals(p.id); return ev ? _noteFormateurVersChiffre(ev.notes[c.id]) : null; }),
       };
+      const toutesSeries = [...seriesStagiaire, serieFormateur];
+      return {
+        c,
+        titreLignes: doc.splitTextToSize(c.code + ' — ' + c.libelle, COL_LARGEUR),
+        toutesSeries,
+        hLegende: _pdfLegendeHauteur(doc, COL_LARGEUR, toutesSeries),
+      };
+    });
+    // Hauteur de ligne alignée sur la colonne au titre le plus long ET sur la légende la plus
+    // haute (nombre de critères + longueur des libellés variables), pour que les deux
+    // graphiques d'une même rangée démarrent à la même hauteur.
+    const hTitre = Math.max(...infosPaire.map(inf => inf.titreLignes.length)) * 3 + 1.5;
+    const hLegende = Math.max(...infosPaire.map(inf => inf.hLegende));
+    const hRow = hTitre + hLegende + HAUTEUR_GRAPHE + 6;
+    if (y > BAS_PAGE - hRow) NOUVELLE_PAGE4();
+
+    infosPaire.forEach((inf, i) => {
+      const x0 = MARGE + i * (COL_LARGEUR + COL_GAP);
+      doc.setFontSize(6.5);
+      doc.setTextColor(30, 30, 30);
+      inf.titreLignes.forEach((l, li) => doc.text(l, x0, y + li * 3));
+
       const yLegende = y + hTitre;
-      _pdfLegende(doc, x0, yLegende, [...seriesStagiaire, serieFormateur]);
-      _pdfCourbeMultiple(doc, x0, yLegende + 3, COL_LARGEUR, HAUTEUR_GRAPHE, [...seriesStagiaire, serieFormateur], numerosMSP, 10);
+      const yGraphe = _pdfLegende(doc, x0, yLegende, COL_LARGEUR, inf.toutesSeries) + 2;
+      _pdfCourbeMultiple(doc, x0, yGraphe, COL_LARGEUR, HAUTEUR_GRAPHE, inf.toutesSeries, numerosMSP, 10);
     });
     y += hRow;
   }
-  if (y > BAS_PAGE - 45) NOUVELLE_PAGE4();
+
+  // ---- Ressenti stagiaire (mot), au-dessus de la courbe de ressenti formateur : deux tableaux
+  // Passage n°/Jour/Ressenti côte à côte (6 colonnes au total) pour utiliser toute la largeur de
+  // la page plutôt qu'une longue liste verticale à 3 colonnes, sur le modèle demandé par Jérémy. ----
+  if (y > BAS_PAGE - 95) NOUVELLE_PAGE4();
   y += 4;
+  doc.setFontSize(10);
+  doc.setTextColor(30, 30, 30);
+  doc.text('Ressenti du stagiaire au fil des passages (mot)', 14, y);
+  y += 3;
+  let finRessentiMot = y;
+  if (mesPassages.length) {
+    const milieu = Math.ceil(mesPassages.length / 2);
+    const gauche = mesPassages.slice(0, milieu);
+    const droite = mesPassages.slice(milieu);
+    const largeurDemi = (CONTENU - 6) / 2;
+    const ligneRessenti = p => { const a = mesAutos(p.id); return [p.numero, p.jour, a && a.ressenti ? a.ressenti : '—']; };
+    doc.autoTable({
+      startY: y,
+      margin: { left: 14, right: MARGE + largeurDemi + 6 },
+      tableWidth: largeurDemi,
+      head: [['Passage n°', 'Jour', 'Ressenti (mot)']],
+      body: gauche.map(ligneRessenti),
+      styles: { fontSize: 7.5, cellPadding: 1.5 },
+      headStyles: { fillColor: ROUGE_SDIS },
+    });
+    finRessentiMot = doc.lastAutoTable.finalY;
+    if (droite.length) {
+      doc.autoTable({
+        startY: y,
+        margin: { left: 14 + largeurDemi + 6 },
+        tableWidth: largeurDemi,
+        head: [['Passage n°', 'Jour', 'Ressenti (mot)']],
+        body: droite.map(ligneRessenti),
+        styles: { fontSize: 7.5, cellPadding: 1.5 },
+        headStyles: { fillColor: ROUGE_SDIS },
+      });
+      finRessentiMot = Math.max(finRessentiMot, doc.lastAutoTable.finalY);
+    }
+  }
+  y = finRessentiMot + 8;
+
   doc.setFontSize(10);
   doc.setTextColor(30, 30, 30);
   doc.text('Ressenti du formateur au fil des passages (échelle 0 à 10)', 14, y);
@@ -521,25 +578,6 @@ async function genererLivretCertification(stagiaireId) {
     doc.setTextColor(30, 30, 30);
   }
   y += 42;
-
-  // Tableau du ressenti stagiaire (mot), transposé à l'horizontale : une colonne par MSP,
-  // alignée sous la courbe de ressenti formateur juste au-dessus (même largeur pleine page,
-  // CONTENU) pour qu'on lise directement le mot du stagiaire en face du point de la courbe
-  // correspondant, plutôt qu'un tableau vertical décorrélé de la courbe.
-  if (mesPassages.length) {
-    doc.autoTable({
-      startY: y,
-      head: [mesPassages.map(p => 'MSP ' + p.numero)],
-      body: [mesPassages.map(p => {
-        const a = mesAutos(p.id);
-        return a && a.ressenti ? a.ressenti : '—';
-      })],
-      styles: { fontSize: 8, cellPadding: 2, halign: 'center' },
-      headStyles: { fillColor: ROUGE_SDIS, halign: 'center' },
-      margin: { left: 14, right: 14 },
-      tableWidth: CONTENU,
-    });
-  }
 
   // ---------- Page suivante : retours par passage (APP à proposer / commentaires) ----------
   doc.addPage();

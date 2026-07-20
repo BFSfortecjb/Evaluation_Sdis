@@ -160,8 +160,11 @@
   .carte-courbe { border: 1px solid #eee; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
   .carte-courbe h4 { margin: 0 0 6px; font-size: 14px; color: var(--rouge); }
   .svg-courbe { width: 100%; height: auto; display: block; }
-  .legende-courbe { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; font-weight: 600; margin-bottom: 6px; }
-  .pastille-courbe { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+  /* Une ligne par critère (code + libellé complet), plutôt qu'une ligne unique avec juste les
+     codes : sans le libellé, « C1.1 » ne veut rien dire sans revenir chercher le référentiel. */
+  .legende-courbe { font-size: 11px; margin-bottom: 6px; }
+  .item-legende-courbe { margin-bottom: 2px; line-height: 1.3; }
+  .pastille-courbe { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: middle; flex-shrink: 0; }
 </style>
 </head>
 <body>
