@@ -702,3 +702,164 @@ async function genererLivretCertification(stagiaireId) {
   doc.save(`Livret_certification_${s.nom}_${s.prenom}.pdf`.replace(/\s+/g, '_'));
   toast('Livret de certification généré');
 }
+
+// ---------- Chevalet de formation (livrable 8) ----------
+// Une page A4 portrait par stagiaire, à imprimer puis plier en deux (ligne de pliure au milieu
+// de la page, matérialisée par un trait pointillé) :
+//  - moitié basse (à l'endroit une fois plié posé sur la table) : écusson + prénom NOM + CIS.
+//  - moitié haute (tournée à 180°, pour se lire à l'endroit une fois le chevalet plié et posé
+//    debout comme un marque-place) : un QR code unique menant à l'application (lien direct avec
+//    le code de session, ?code=XXXX — voir entreeStagiaireCode() dans core.js) + le chronogramme
+//    de la semaine (Jour × Matin/Après-midi). Le chronogramme n'est imprimé que pour les
+//    formations de 7 jours maximum ; au-delà, un renvoi invite à consulter l'appli (le chevalet
+//    étant une pièce imprimée à l'avance, un programme sur 8 jours+ ne tiendrait plus lisiblement
+//    dessus, et les stagiaires ont de toute façon accès au chronogramme complet dans l'appli,
+//    onglet Chronogramme côté encadrement / bloc « Programme de la semaine » côté stagiaire).
+//
+// Technique de rotation à 180° : jsPDF ne fait pas tourner du texte facilement ; on dessine donc
+// tout le contenu de la moitié haute sur un <canvas> hors écran, avec un repère translate(w,h) +
+// rotate(π) — le contenu est dessiné normalement (coordonnées habituelles, haut-gauche vers
+// bas-droite) mais ressort à 180° dans le buffer de pixels final. On insère ensuite cette unique
+// image dans le PDF (doc.addImage), ce qui évite de manipuler l'API de rotation de texte/image
+// de jsPDF pièce par pièce.
+function _pdfDessinerQR(ctx, x, y, taille, donnees) {
+  if (typeof qrcode !== 'function') return; // librairie qrcode-generator non chargée
+  const qr = qrcode(0, 'M');
+  qr.addData(donnees);
+  qr.make();
+  const n = qr.getModuleCount();
+  const cell = taille / n;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(x, y, taille, taille);
+  ctx.fillStyle = '#1a1a1a';
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (qr.isDark(r, c)) ctx.fillRect(x + c * cell, y + r * cell, cell + 0.5, cell + 0.5);
+    }
+  }
+}
+
+// Dessine la moitié haute (QR + chronogramme) sur un canvas hors écran, retourné à 180°, et
+// renvoie son dataURL PNG prêt à insérer dans le PDF via doc.addImage.
+function _pdfCanvasHautChevalet(s, urlApp) {
+  const ECH = 4; // px/mm — résolution suffisante pour une impression nette
+  const wMM = 210, hMM = 148.5;
+  const canvas = document.createElement('canvas');
+  canvas.width = wMM * ECH;
+  canvas.height = hMM * ECH;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.translate(canvas.width, canvas.height);
+  ctx.rotate(Math.PI);
+  const mm = v => v * ECH; // helper : mm → px dans le repère déjà transformé
+
+  // Bandeau rouge SDIS
+  ctx.fillStyle = 'rgb(' + ROUGE_SDIS.join(',') + ')';
+  ctx.fillRect(0, 0, canvas.width, mm(14));
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold ' + mm(6) + 'px Arial';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('Chronogramme de la semaine', mm(8), mm(7));
+
+  // QR code, en haut à droite du bloc (à gauche une fois retourné à 180°)
+  const qrTaille = mm(30);
+  const qrX = canvas.width - qrTaille - mm(8);
+  const qrY = mm(20);
+  _pdfDessinerQR(ctx, qrX, qrY, qrTaille, urlApp);
+  ctx.fillStyle = '#333';
+  ctx.font = mm(2.6) + 'px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText('Scanne pour te connecter', qrX + qrTaille / 2, qrY + qrTaille + mm(4));
+  ctx.fillText('à l\'application', qrX + qrTaille / 2, qrY + qrTaille + mm(7.5));
+  ctx.textAlign = 'left';
+
+  // Chronogramme (Jour × Matin/Après-midi), limité à 7 jours imprimés
+  const nbJours = (S.formation && S.formation.nb_jours) || 5;
+  const joursTous = Array.from({ length: nbJours }, (_, i) => 'J' + (i + 1));
+  const joursAffiches = joursTous.slice(0, 7);
+  const zoneX = mm(8), zoneY = mm(20), zoneW = canvas.width - qrTaille - mm(24), zoneH = mm(100);
+
+  if (nbJours > 7) {
+    ctx.fillStyle = '#666';
+    ctx.font = mm(3) + 'px Arial';
+    ctx.fillText('Formation de ' + nbJours + ' jours :', zoneX, zoneY + mm(8));
+    ctx.fillText('chronogramme complet à consulter', zoneX, zoneY + mm(14));
+    ctx.fillText('dans l\'application (onglet Chronogramme).', zoneX, zoneY + mm(20));
+  } else {
+    const colW = zoneW / joursAffiches.length;
+    const rowH = zoneH / 2.6;
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = mm(0.15);
+    // en-têtes jours
+    ctx.font = 'bold ' + mm(3) + 'px Arial';
+    ctx.fillStyle = '#c8102e';
+    ctx.textAlign = 'center';
+    joursAffiches.forEach((j, i) => ctx.fillText(j, zoneX + i * colW + colW / 2, zoneY + mm(3)));
+    ctx.textAlign = 'left';
+    ['matin', 'apres_midi'].forEach((demi, ri) => {
+      const rowY = zoneY + mm(6) + ri * rowH;
+      ctx.fillStyle = '#888';
+      ctx.font = mm(2.4) + 'px Arial';
+      ctx.fillText(demi === 'matin' ? 'MATIN' : 'APRÈS-MIDI', zoneX, rowY - mm(1));
+      joursAffiches.forEach((j, ci) => {
+        const cellX = zoneX + ci * colW, cellY = rowY;
+        ctx.strokeRect(cellX, cellY, colW - mm(1), rowH - mm(2));
+        const blocs = (typeof _blocsPlanningCellule === 'function') ? _blocsPlanningCellule(j, demi) : [];
+        ctx.fillStyle = '#222';
+        ctx.font = mm(2.3) + 'px Arial';
+        blocs.slice(0, 4).forEach((b, bi) => {
+          ctx.fillText(String(b.libelle).slice(0, 22), cellX + mm(1), cellY + mm(3.2) + bi * mm(3.4), colW - mm(2));
+        });
+      });
+    });
+  }
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0); // reset avant toDataURL (bonne pratique, sans effet ici)
+  return canvas.toDataURL('image/png');
+}
+
+async function genererChevalets() {
+  if (!window.jspdf) return toast('Bibliothèque PDF non chargée', false);
+  if (typeof qrcode !== 'function') return toast('Bibliothèque QR code non chargée (réuploader index.html)', false);
+  const stagiaires = S.data.stagiaires;
+  if (!stagiaires || !stagiaires.length) return toast('Aucun stagiaire dans cette session', false);
+  toast('Génération des chevalets en cours…');
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const urlBase = location.origin + location.pathname + '?code=' + encodeURIComponent(S.session.code_acces);
+  const hMM = 148.5, wMM = 210;
+
+  for (let i = 0; i < stagiaires.length; i++) {
+    const s = stagiaires[i];
+    if (i > 0) doc.addPage();
+
+    // Moitié haute : QR + chronogramme, rendue à 180° via canvas hors écran
+    const imgHaut = _pdfCanvasHautChevalet(s, urlBase);
+    doc.addImage(imgHaut, 'PNG', 0, 0, wMM, hMM);
+
+    // Ligne de pliure
+    doc.setDrawColor(180, 180, 180);
+    doc.setLineDashPattern([2, 1.5], 0);
+    doc.line(0, hMM, wMM, hMM);
+    doc.setLineDashPattern([], 0);
+    doc.setFontSize(7);
+    doc.setTextColor(150, 150, 150);
+    doc.text('✂ plier ici', wMM / 2, hMM - 2, { align: 'center' });
+
+    // Moitié basse : écusson + identité, à l'endroit
+    const lw = 15.4, lh = 24;
+    try { doc.addImage(LOGO_SDIS29, 'PNG', (wMM - lw) / 2, hMM + 14, lw, lh); } catch (e) { /* logo optionnel */ }
+    doc.setTextColor(30, 30, 30);
+    doc.setFontSize(22);
+    doc.text((s.prenom + ' ' + s.nom).toUpperCase(), wMM / 2, hMM + 14 + lh + 14, { align: 'center' });
+    doc.setFontSize(13);
+    doc.setTextColor(100, 100, 100);
+    doc.text(s.cis || S.session.lieu || '', wMM / 2, hMM + 14 + lh + 24, { align: 'center' });
+  }
+
+  _pdfPiedDePage(doc);
+  doc.save(`Chevalets_${(S.session.lieu || S.formation.libelle || 'session')}.pdf`.replace(/\s+/g, '_'));
+  toast(`${stagiaires.length} chevalet(s) généré(s)`);
+}
