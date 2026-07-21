@@ -2214,6 +2214,7 @@ async function ecranParametresFormations() {
       <td style="white-space:nowrap">
         <button class="btn petit secondaire" onclick="ecranFormulaireFormation(${f.id})">✏️</button>
         <button class="btn petit secondaire" onclick="ecranCompetencesFormation(${f.id})">📋 Compétences</button>
+        <button class="btn petit secondaire" onclick="ecranBlocsPlanningModeles(${f.id})">🗓️ Planning imposé</button>
       </td>
     </tr>`).join('');
 

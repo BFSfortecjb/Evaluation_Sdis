@@ -183,6 +183,11 @@
   .bloc-planning .actions-bloc { margin-top: 4px; display: flex; gap: 6px; }
   .bloc-planning .actions-bloc span { cursor: pointer; font-size: 11px; color: var(--bleu); }
   .btn-ajout-bloc { width: 100%; background: none; border: 1px dashed #bbb; border-radius: 6px; padding: 4px; font-size: 11px; color: #888; cursor: pointer; }
+  /* Réserve « Blocs à placer » (modèles imposés par la formation, pas encore glissés dans le
+     chronogramme de cette session précise) : rangée horizontale scrollable, distincte de la
+     grille pour bien montrer que ces blocs n'ont pas encore de jour/demi-journée. */
+  .reserve-planning { display: flex; gap: 8px; overflow-x: auto; padding: 8px 0 12px; }
+  .bloc-planning-reserve { background: #fff3e0; border-left-color: var(--warn); flex-shrink: 0; min-width: 140px; }
 </style>
 </head>
 <body>
