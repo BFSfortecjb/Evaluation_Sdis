@@ -1241,11 +1241,43 @@ async function enregistrerPresenceFormateur(id) {
 }
 
 // ---------- Onglet Feuille de garde ----------
+// Un passage est considéré « déjà évalué » dès qu'au moins une évaluation formateur existe pour
+// lui — au-delà de ce point, le supprimer effacerait un travail de notation déjà fait, donc pas
+// de bouton supprimer sur ces passages (voir onglet « MSP déjà évaluées »).
+function _passageAUneEvaluation(p) {
+  return S.data.evaluations.some(ev => ev.passage_id === p.id);
+}
+
+let _gardeVueActuelle = 'planifiees';
+
 function ongletGarde() {
+  $('session-contenu').innerHTML = `
+    <div class="carte">
+      <h2>Feuille de garde — passages</h2>
+      <div class="onglets">
+        <button id="garde-tab-planifiees" class="actif" onclick="_gardeChangerVue('planifiees')">🗓️ MSP planifiées</button>
+        <button id="garde-tab-evaluees" onclick="_gardeChangerVue('evaluees')">✅ MSP déjà évaluées</button>
+      </div>
+      <div id="garde-zone"></div>
+    </div>`;
+  _gardeVueActuelle = 'planifiees';
+  _rendreGarde();
+}
+
+function _gardeChangerVue(mode) {
+  _gardeVueActuelle = mode;
+  $('garde-tab-planifiees').classList.toggle('actif', mode === 'planifiees');
+  $('garde-tab-evaluees').classList.toggle('actif', mode === 'evaluees');
+  _rendreGarde();
+}
+
+function _rendreGarde() {
   const utiliseTypes = S.formation.utilise_types_msp;
   const nomStag = id => { const s = S.data.stagiaires.find(x => x.id === id); return s ? s.prenom + ' ' + s.nom : '?'; };
   const libelleType = t => t === 'complexe' ? '🔴 Complexe' : t === 'mineure' ? '🟢 Mineure' : '';
-  const lignes = S.data.passages.map(p => {
+  const evaluees = _gardeVueActuelle === 'evaluees';
+  const passagesVue = S.data.passages.filter(p => _passageAUneEvaluation(p) === evaluees);
+  const lignes = passagesVue.map(p => {
     const eq = S.data.equipiers.filter(e => e.passage_id === p.id);
     const theme = S.formation.themes.find(t => t.id === p.theme_id);
     return `<tr>
@@ -1253,16 +1285,17 @@ function ongletGarde() {
       ${utiliseTypes ? `<td>${esc(libelleType(p.type_msp))}</td>` : ''}
       <td>${esc(p.sujet || '')}</td><td>${p.evaluateur ? esc(p.evaluateur) : '<span class="statut-eca">À affecter</span>'}</td>
       <td>${eq.map(e => esc(nomStag(e.stagiaire_id)) + (e.evalue ? '' : ' <small>(non évalué)</small>')).join('<br>')}</td>
-      <td><button class="btn petit secondaire" onclick="supprPassage(${p.id})">✕</button></td></tr>`;
+      <td>${evaluees
+        ? '<span class="info" title="Déjà évalué : suppression désactivée pour ne pas perdre les notes saisies.">🔒</span>'
+        : `<button class="btn petit secondaire" onclick="supprPassage(${p.id})">✕</button>`}</td></tr>`;
   }).join('');
 
-  $('session-contenu').innerHTML = `
-    <div class="carte">
-      <h2>Feuille de garde — passages prévus</h2>
+  $('garde-zone').innerHTML = `
       <div class="table-scroll"><table>
         <tr><th>N°</th><th>Jour</th><th>Thème</th>${utiliseTypes ? '<th>Type MSP</th>' : ''}<th>Sujet</th><th>Évaluateur</th><th>Équipiers</th><th></th></tr>
-        ${lignes}
+        ${lignes || `<tr><td colspan="${utiliseTypes ? 8 : 7}" class="info">${evaluees ? 'Aucune MSP évaluée pour le moment.' : 'Aucune MSP planifiée pour le moment.'}</td></tr>`}
       </table></div>
+      ${evaluees ? '' : `
       <h3>Programmer un passage</h3>
       <div class="ligne">
         <div><label>Jour</label><select id="pa-jour">${joursFormation().map(j => `<option>${j}</option>`).join('')}</select></div>
@@ -1293,7 +1326,7 @@ function ongletGarde() {
           &nbsp;·&nbsp; <input type="checkbox" id="pa-ev-${s.id}" checked style="width:auto"> <small>évalué</small>
         </div>`).join('')}
       <button class="btn" onclick="ajouterPassage()">Programmer</button>
-    </div>`;
+      `}`;
 }
 
 async function ajouterPassage() {
