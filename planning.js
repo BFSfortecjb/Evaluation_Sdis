@@ -241,6 +241,7 @@ function _rendreOngletPlanning() {
               ${i > 0 ? `<span onclick="deplacerBlocPlanning(${b.id}, -1)" title="Monter">▲</span>` : ''}
               ${i < blocs.length - 1 ? `<span onclick="deplacerBlocPlanning(${b.id}, 1)" title="Descendre">▼</span>` : ''}
               <span onclick="formBlocPlanning(${b.id})">${b.modele_id ? 'Annoter' : 'Modifier'}</span>
+              ${!b.modele_id ? `<span onclick="dupliquerBlocPlanning(${b.id})" title="Dupliquer ce bloc">⧉ Dupliquer</span>` : ''}
               <span onclick="supprimerBlocPlanning(${b.id})">Supprimer</span>
             </div>
           </div>`).join('')}
@@ -347,6 +348,23 @@ async function deplacerBlocPlanning(blocId, delta) {
     }
   }
   await chargerDonneesSession(S.session.id);
+  _rendreOngletPlanning();
+}
+
+// Duplique un bloc libre (jamais un bloc imposé — modele_id null obligatoire ici, pas de bouton
+// affiché sinon) dans la même case, juste après lui : pratique pour répéter une activité proche
+// sans tout ressaisir (ex. deux ateliers similaires le même après-midi).
+async function dupliquerBlocPlanning(blocId) {
+  const b = (S.data.blocsPlanning || []).find(x => x.id === blocId);
+  if (!b || b.modele_id) return;
+  const ordre = _blocsPlanningCellule(b.jour, b.demi_journee).length;
+  const { error } = await sb.from('blocs_planning').insert({
+    session_id: S.session.id, jour: b.jour, demi_journee: b.demi_journee, ordre,
+    libelle: b.libelle, annotation: b.annotation, duree_minutes: b.duree_minutes,
+  });
+  if (error) return toast(error.message, false);
+  await chargerDonneesSession(S.session.id);
+  toast('Bloc dupliqué');
   _rendreOngletPlanning();
 }
 
