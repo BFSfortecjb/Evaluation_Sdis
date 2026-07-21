@@ -197,11 +197,13 @@ function _rendreOngletPlanning() {
       const blocs = _blocsPlanningCellule(j, demiId);
       cellules += `<div class="planning-cellule" ondragover="event.preventDefault(); this.classList.add('survol')"
         ondragleave="this.classList.remove('survol')" ondrop="deposerBlocPlanning(event, '${j}', '${demiId}')">
-        ${blocs.map(b => `
+        ${blocs.map((b, i) => `
           <div class="bloc-planning" draggable="true" ondragstart='event.dataTransfer.setData("text/plain", JSON.stringify({type:"bloc", id:${b.id}}))'>
             <div class="libelle-bloc">${b.modele_id ? '🔒 ' : ''}${esc(b.libelle)}</div>
             ${b.annotation ? `<div class="annotation-bloc">🗒 ${esc(b.annotation)}</div>` : ''}
             <div class="actions-bloc">
+              ${i > 0 ? `<span onclick="deplacerBlocPlanning(${b.id}, -1)" title="Monter">▲</span>` : ''}
+              ${i < blocs.length - 1 ? `<span onclick="deplacerBlocPlanning(${b.id}, 1)" title="Descendre">▼</span>` : ''}
               <span onclick="formBlocPlanning(${b.id})">${b.modele_id ? 'Annoter' : 'Modifier'}</span>
               <span onclick="supprimerBlocPlanning(${b.id})">Supprimer</span>
             </div>
@@ -279,6 +281,31 @@ async function enregistrerBlocPlanning(blocId, jour, demi) {
   }
   await chargerDonneesSession(S.session.id);
   toast('Bloc enregistré');
+  _rendreOngletPlanning();
+}
+
+// Change l'ordre d'affichage de deux blocs voisins DANS LA MÊME case (jour + demi-journée) —
+// le glisser-déposer ne gère que le déplacement d'une case à l'autre, pas la réorganisation à
+// l'intérieur d'une même case (déposer un bloc dans sa propre case ne change pas son rang, il
+// n'y avait donc aucun moyen d'inverser deux blocs empilés au même endroit avant ces flèches).
+// Renumérote toute la case (0, 1, 2...) plutôt que d'échanger seulement les deux valeurs
+// d'ordre, pour rester correct même si des données existantes avaient des ordres dégénérés
+// (ex. plusieurs blocs à ordre 0).
+async function deplacerBlocPlanning(blocId, delta) {
+  const b = (S.data.blocsPlanning || []).find(x => x.id === blocId);
+  if (!b) return;
+  const cellule = _blocsPlanningCellule(b.jour, b.demi_journee);
+  const idx = cellule.findIndex(x => x.id === blocId);
+  const idxVoisin = idx + delta;
+  if (idx === -1 || idxVoisin < 0 || idxVoisin >= cellule.length) return;
+  [cellule[idx], cellule[idxVoisin]] = [cellule[idxVoisin], cellule[idx]];
+  for (let i = 0; i < cellule.length; i++) {
+    if (cellule[i].ordre !== i) {
+      const { error } = await sb.from('blocs_planning').update({ ordre: i }).eq('id', cellule[i].id);
+      if (error) return toast(error.message, false);
+    }
+  }
+  await chargerDonneesSession(S.session.id);
   _rendreOngletPlanning();
 }
 
