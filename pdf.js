@@ -80,7 +80,9 @@ async function genererFicheSuivi(stagiaireId) {
   ], 14, y);
   y += 18;
 
-  const NOUVELLE_PAGE = () => { doc.addPage(); _pdfEnTete(doc, TITRE, s.prenom + ' ' + s.nom); y = 30; };
+  // Renvoie le nouveau y (30) en plus de le fixer sur la variable englobante : nécessaire pour
+  // _pdfBlocGraphesCompetences, qui attend que nouvellePage() lui redonne un y numérique.
+  const NOUVELLE_PAGE = () => { doc.addPage(); _pdfEnTete(doc, TITRE, s.prenom + ' ' + s.nom); y = 30; return y; };
   const BAS_PAGE = 185;
 
   // ---------- Graphiques par compétence (identiques au livret : une courbe par critère
@@ -91,56 +93,9 @@ async function genererFicheSuivi(stagiaireId) {
   doc.setTextColor(30, 30, 30);
   y += 4;
 
-  const HAUTEUR_GRAPHE = 15;
-  const COL_GAP = 8;
-  const COL_LARGEUR = (CONTENU - COL_GAP) / 2;
-  const competencesAvecCriteres = S.formation.competences.filter(c =>
-    S.formation.criteres.some(cr => cr.competence_id === c.id));
-
-  for (let idx = 0; idx < competencesAvecCriteres.length; idx += 2) {
-    const paire = [competencesAvecCriteres[idx], competencesAvecCriteres[idx + 1]].filter(Boolean);
-    doc.setFontSize(6.5);
-    const infosPaire = paire.map(c => {
-      const critList = S.formation.criteres.filter(cr => cr.competence_id === c.id).sort((a, b) => a.ordre - b.ordre);
-      const seriesStagiaire = critList.map((cr, ci) => {
-        const code = c.code + '.' + (ci + 1);
-        return {
-          label: code + ' — ' + cr.libelle,
-          court: code,
-          couleur: COULEURS_STAGIAIRE[ci % COULEURS_STAGIAIRE.length],
-          valeurs: mesPassages.map(p => { const a = mesAutos(p.id); return a ? a.notes[cr.id] : null; }),
-        };
-      });
-      const serieFormateur = {
-        label: 'Formateur',
-        court: 'F',
-        couleur: ORANGE_FORMATEUR,
-        valeurs: mesPassages.map(p => { const ev = mesEvals(p.id); return ev ? _noteFormateurVersChiffre(ev.notes[c.id]) : null; }),
-      };
-      const toutesSeries = [...seriesStagiaire, serieFormateur];
-      return {
-        c,
-        titreLignes: doc.splitTextToSize(c.code + ' — ' + c.libelle, COL_LARGEUR),
-        toutesSeries,
-        hLegende: _pdfLegendeHauteur(doc, COL_LARGEUR, toutesSeries),
-      };
-    });
-    const hTitre = Math.max(...infosPaire.map(inf => inf.titreLignes.length)) * 3 + 1.5;
-    const hLegende = Math.max(...infosPaire.map(inf => inf.hLegende));
-    const hRow = hTitre + hLegende + HAUTEUR_GRAPHE + 6;
-    if (y > BAS_PAGE - hRow) NOUVELLE_PAGE();
-
-    infosPaire.forEach((inf, i) => {
-      const x0 = MARGE + i * (COL_LARGEUR + COL_GAP);
-      doc.setFontSize(6.5);
-      doc.setTextColor(30, 30, 30);
-      inf.titreLignes.forEach((l, li) => doc.text(l, x0, y + li * 3));
-      const yLegende = y + hTitre;
-      const yGraphe = _pdfLegende(doc, x0, yLegende, COL_LARGEUR, inf.toutesSeries) + 2;
-      _pdfCourbeMultiple(doc, x0, yGraphe, COL_LARGEUR, HAUTEUR_GRAPHE, inf.toutesSeries, numerosMSP, 10);
-    });
-    y += hRow;
-  }
+  // Bloc factorisé (_pdfBlocGraphesCompetences), partagé à l'identique avec le livret de
+  // certification — un correctif de mise en page ne vaut alors que pour une seule copie du code.
+  y = _pdfBlocGraphesCompetences(doc, y, MARGE, CONTENU, BAS_PAGE, mesPassages, mesAutos, mesEvals, NOUVELLE_PAGE);
 
   // ---------- Courbe de ressenti formateur ----------
   if (y > BAS_PAGE - 45) NOUVELLE_PAGE();
@@ -167,43 +122,38 @@ async function genererFicheSuivi(stagiaireId) {
     );
     doc.setTextColor(30, 30, 30);
   }
-  y += 42;
+  y += 34;
 
-  // ---------- Mots stagiaire / formateur, passage par passage ----------
+  // ---------- Passage par passage : sujet, mots, commentaire, APP — une seule table fusionnée
+  // (plutôt que deux tables séparées « mots » puis « retours ») pour tenir la fiche en 2 pages max. ----------
   if (y > BAS_PAGE - 20) NOUVELLE_PAGE();
-  const lignesMots = mesPassages.map(p => {
+  doc.setFontSize(10);
+  doc.setTextColor(30, 30, 30);
+  doc.text('Passage par passage : sujet, mots, commentaire, APP à proposer', 14, y);
+  y += 3;
+  const lignesPassages = mesPassages.map(p => {
     const auto = mesAutos(p.id);
     const ev = mesEvals(p.id);
-    return [p.numero, p.jour, auto && auto.ressenti ? auto.ressenti : '—', ev && ev.ressenti_mot ? ev.ressenti_mot : '—'];
+    return [
+      p.numero, p.jour, p.sujet || '—',
+      auto && auto.ressenti ? auto.ressenti : '—',
+      ev && ev.ressenti_mot ? ev.ressenti_mot : '—',
+      ev?.commentaire || '—', ev?.app1 || '—', ev?.app2 || '—', ev?.app3 || '—',
+    ];
   });
-  if (lignesMots.length) {
+  if (lignesPassages.length) {
     doc.autoTable({
       startY: y,
-      head: [['Passage n°', 'Jour', 'Mot stagiaire', 'Mot formateur']],
-      body: lignesMots,
-      styles: { fontSize: 8, cellPadding: 2 },
+      head: [['N°', 'Jour', 'Sujet', 'Mot stagiaire', 'Mot formateur', 'Commentaire', 'APP 1', 'APP 2', 'APP 3']],
+      body: lignesPassages,
+      styles: { fontSize: 6.5, cellPadding: 1.3 },
       headStyles: { fillColor: ROUGE_SDIS },
     });
+    y = doc.lastAutoTable.finalY + 8;
   }
 
-  // ---------- Page suivante : retours par mise en situation ----------
-  doc.addPage();
-  _pdfEnTete(doc, 'Retours par mise en situation', s.prenom + ' ' + s.nom);
-  const lignesApp = mesPassages.map(p => {
-    const ev = mesEvals(p.id);
-    return [p.numero, p.jour, p.sujet || '—', ev?.commentaire || '—', ev?.app1 || '—', ev?.app2 || '—', ev?.app3 || '—'];
-  });
-  doc.autoTable({
-    startY: 28,
-    head: [['MSP n°', 'Jour', 'Sujet', 'Commentaire', 'APP 1', 'APP 2', 'APP 3']],
-    body: lignesApp,
-    styles: { fontSize: 7, cellPadding: 1.5 },
-    headStyles: { fillColor: ROUGE_SDIS },
-  });
-  y = doc.lastAutoTable.finalY + 10;
-
   // ---------- Matrice de suivi : note par compétence et par MSP ----------
-  if (y > BAS_PAGE - 40) { doc.addPage(); _pdfEnTete(doc, 'Matrice de suivi', s.prenom + ' ' + s.nom); y = 28; }
+  if (y > BAS_PAGE - 40) { NOUVELLE_PAGE(); }
   doc.setFontSize(10);
   doc.setTextColor(30, 30, 30);
   doc.text('Matrice de suivi — note par compétence et par MSP', 14, y);
@@ -364,25 +314,91 @@ function _pdfCourbeMultiple(doc, x, y, largeur, hauteur, series, numerosMSP, max
 // illisible sans revenir chercher sa signification dans le référentiel p.2. Repliée sur
 // plusieurs lignes via splitTextToSize si un libellé est trop long pour la largeur de colonne.
 function _pdfLegendeHauteur(doc, largeur, items) {
-  doc.setFontSize(6);
+  doc.setFontSize(5.5);
   let h = 0;
-  items.forEach(it => { h += doc.splitTextToSize(it.label, largeur - 5).length * 2.6; });
+  items.forEach(it => { h += doc.splitTextToSize(it.label, largeur - 5).length * 2.2; });
   return h;
 }
 
 function _pdfLegende(doc, x, y, largeur, items) {
-  doc.setFontSize(6);
+  doc.setFontSize(5.5);
   let cy = y;
   items.forEach(it => {
     const lignes = doc.splitTextToSize(it.label, largeur - 5);
     doc.setFillColor(...it.couleur);
-    doc.rect(x, cy - 2, 2, 2, 'F');
+    doc.rect(x, cy - 1.8, 1.8, 1.8, 'F');
     doc.setTextColor(...it.couleur);
-    lignes.forEach((l, li) => doc.text(l, x + 3.5, cy + li * 2.6));
-    cy += lignes.length * 2.6;
+    lignes.forEach((l, li) => doc.text(l, x + 3, cy + li * 2.2));
+    cy += lignes.length * 2.2;
   });
   doc.setTextColor(30, 30, 30);
   return cy;
+}
+
+// Bloc de graphiques par compétence (grille 2 colonnes, une courbe par critère d'auto-évaluation
+// + une courbe formateur toujours en orange, légende avec libellé complet) — utilisé à
+// l'IDENTIQUE par le livret de certification et la fiche individuelle de suivi. Facteur commun
+// exprès : un chevauchement de texte a été observé dans les deux documents à la fois (même
+// calcul de hauteur de ligne trop juste, dupliqué), corriger ici une seule fois vaut pour les deux
+// plutôt que de risquer une nouvelle divergence entre deux copies.
+// nouvellePage() doit ouvrir une nouvelle page, redessiner l'en-tête, et renvoyer le nouveau y (30).
+function _pdfBlocGraphesCompetences(doc, y, MARGE, CONTENU, BAS_PAGE, mesPassages, mesAutos, mesEvals, nouvellePage) {
+  const HAUTEUR_GRAPHE = 12;
+  const COL_GAP = 6;
+  const COL_LARGEUR = (CONTENU - COL_GAP) / 2;
+  const numerosMSP = mesPassages.map(p => p.numero);
+  const competencesAvecCriteres = S.formation.competences.filter(c =>
+    S.formation.criteres.some(cr => cr.competence_id === c.id));
+
+  for (let idx = 0; idx < competencesAvecCriteres.length; idx += 2) {
+    const paire = [competencesAvecCriteres[idx], competencesAvecCriteres[idx + 1]].filter(Boolean);
+    doc.setFontSize(6);
+    const infosPaire = paire.map(c => {
+      const critList = S.formation.criteres.filter(cr => cr.competence_id === c.id).sort((a, b) => a.ordre - b.ordre);
+      const seriesStagiaire = critList.map((cr, ci) => {
+        const code = c.code + '.' + (ci + 1);
+        return {
+          label: code + ' — ' + cr.libelle,
+          court: code,
+          couleur: COULEURS_STAGIAIRE[ci % COULEURS_STAGIAIRE.length],
+          valeurs: mesPassages.map(p => { const a = mesAutos(p.id); return a ? a.notes[cr.id] : null; }),
+        };
+      });
+      const serieFormateur = {
+        label: 'Formateur',
+        court: 'F',
+        couleur: ORANGE_FORMATEUR,
+        valeurs: mesPassages.map(p => { const ev = mesEvals(p.id); return ev ? _noteFormateurVersChiffre(ev.notes[c.id]) : null; }),
+      };
+      const toutesSeries = [...seriesStagiaire, serieFormateur];
+      return {
+        c,
+        titreLignes: doc.splitTextToSize(c.code + ' — ' + c.libelle, COL_LARGEUR),
+        toutesSeries,
+        hLegende: _pdfLegendeHauteur(doc, COL_LARGEUR, toutesSeries),
+      };
+    });
+    const hTitre = Math.max(...infosPaire.map(inf => inf.titreLignes.length)) * 2.8 + 1.2;
+    const hLegende = Math.max(...infosPaire.map(inf => inf.hLegende));
+    // +10 : marge de sécurité (espace après la légende, décalage + hauteur des repères de n° de
+    // MSP sous le graphique, marge avant le titre suivant). Un chevauchement de texte observé sur
+    // le livret ET la fiche venait d'un tampon insuffisant ici (+6 seulement) : corrigé une fois
+    // pour les deux documents.
+    const hRow = hTitre + hLegende + HAUTEUR_GRAPHE + 10;
+    if (y > BAS_PAGE - hRow) y = nouvellePage();
+
+    infosPaire.forEach((inf, i) => {
+      const x0 = MARGE + i * (COL_LARGEUR + COL_GAP);
+      doc.setFontSize(6);
+      doc.setTextColor(30, 30, 30);
+      inf.titreLignes.forEach((l, li) => doc.text(l, x0, y + li * 2.8));
+      const yLegende = y + hTitre;
+      const yGraphe = _pdfLegende(doc, x0, yLegende, COL_LARGEUR, inf.toutesSeries) + 1.5;
+      _pdfCourbeMultiple(doc, x0, yGraphe, COL_LARGEUR, HAUTEUR_GRAPHE, inf.toutesSeries, numerosMSP, 10);
+    });
+    y += hRow;
+  }
+  return y;
 }
 
 // Courbe (ligne brisée) pour le ressenti formateur au fil des passages, avec repères d'échelle
@@ -591,68 +607,11 @@ async function genererLivretCertification(stagiaireId) {
   doc.text('Une courbe par critère d\'auto-évaluation (légende avec libellé complet ci-dessous de chaque graphique), plus une courbe formateur (toujours en orange) — échelle 0 à 10 (A+ = 10, A = 7, ECA = 5, NA = 0), n° de MSP en abscisse.', 14, y);
   doc.setTextColor(30, 30, 30);
   y += 4;
-  // Deux colonnes, mise en page resserrée pour tenir les 8 compétences sur une seule page
-  // (au lieu d'un seul graphique par ligne en pleine largeur, qui en tenait 3 par page).
-  const HAUTEUR_GRAPHE = 15;
-  const COL_GAP = 8;
-  const COL_LARGEUR = (CONTENU - COL_GAP) / 2;
+  // Deux colonnes, mise en page resserrée pour tenir le plus de compétences possible sur une
+  // seule page — bloc factorisé (_pdfBlocGraphesCompetences), partagé avec la fiche individuelle
+  // de suivi pour qu'un correctif ne vaille que pour une seule copie du code.
   const BAS_PAGE = 185; // hauteur utile en paysage (page 210mm de haut, marge basse pour le pied de page)
-  const numerosMSP = mesPassages.map(p => p.numero);
-  const competencesAvecCriteres = S.formation.competences.filter(c =>
-    S.formation.criteres.some(cr => cr.competence_id === c.id));
-
-  for (let idx = 0; idx < competencesAvecCriteres.length; idx += 2) {
-    const paire = [competencesAvecCriteres[idx], competencesAvecCriteres[idx + 1]].filter(Boolean);
-    doc.setFontSize(6.5);
-    const infosPaire = paire.map(c => {
-      const critList = S.formation.criteres.filter(cr => cr.competence_id === c.id).sort((a, b) => a.ordre - b.ordre);
-      // Une courbe par critère (pas de moyenne : plusieurs critères d'auto-évaluation existent
-      // pour une seule courbe formateur, les fondre en une moyenne masquait le détail utile).
-      // label = code + LIBELLÉ COMPLET (affiché dans la légende ci-dessous du graphique) ;
-      // court = juste le code, affiché en bout de courbe (repère rapide sans encombrer le graphique).
-      const seriesStagiaire = critList.map((cr, ci) => {
-        const code = c.code + '.' + (ci + 1);
-        return {
-          label: code + ' — ' + cr.libelle,
-          court: code,
-          couleur: COULEURS_STAGIAIRE[ci % COULEURS_STAGIAIRE.length],
-          valeurs: mesPassages.map(p => { const a = mesAutos(p.id); return a ? a.notes[cr.id] : null; }),
-        };
-      });
-      const serieFormateur = {
-        label: 'Formateur',
-        court: 'F',
-        couleur: ORANGE_FORMATEUR,
-        valeurs: mesPassages.map(p => { const ev = mesEvals(p.id); return ev ? _noteFormateurVersChiffre(ev.notes[c.id]) : null; }),
-      };
-      const toutesSeries = [...seriesStagiaire, serieFormateur];
-      return {
-        c,
-        titreLignes: doc.splitTextToSize(c.code + ' — ' + c.libelle, COL_LARGEUR),
-        toutesSeries,
-        hLegende: _pdfLegendeHauteur(doc, COL_LARGEUR, toutesSeries),
-      };
-    });
-    // Hauteur de ligne alignée sur la colonne au titre le plus long ET sur la légende la plus
-    // haute (nombre de critères + longueur des libellés variables), pour que les deux
-    // graphiques d'une même rangée démarrent à la même hauteur.
-    const hTitre = Math.max(...infosPaire.map(inf => inf.titreLignes.length)) * 3 + 1.5;
-    const hLegende = Math.max(...infosPaire.map(inf => inf.hLegende));
-    const hRow = hTitre + hLegende + HAUTEUR_GRAPHE + 6;
-    if (y > BAS_PAGE - hRow) NOUVELLE_PAGE4();
-
-    infosPaire.forEach((inf, i) => {
-      const x0 = MARGE + i * (COL_LARGEUR + COL_GAP);
-      doc.setFontSize(6.5);
-      doc.setTextColor(30, 30, 30);
-      inf.titreLignes.forEach((l, li) => doc.text(l, x0, y + li * 3));
-
-      const yLegende = y + hTitre;
-      const yGraphe = _pdfLegende(doc, x0, yLegende, COL_LARGEUR, inf.toutesSeries) + 2;
-      _pdfCourbeMultiple(doc, x0, yGraphe, COL_LARGEUR, HAUTEUR_GRAPHE, inf.toutesSeries, numerosMSP, 10);
-    });
-    y += hRow;
-  }
+  y = _pdfBlocGraphesCompetences(doc, y, MARGE, CONTENU, BAS_PAGE, mesPassages, mesAutos, mesEvals, () => { NOUVELLE_PAGE4(); return y; });
 
   // ---- Ressenti stagiaire (mot), au-dessus de la courbe de ressenti formateur : deux tableaux
   // Passage n°/Jour/Ressenti côte à côte (6 colonnes au total) pour utiliser toute la largeur de
