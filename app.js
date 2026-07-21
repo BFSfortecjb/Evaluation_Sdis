@@ -773,7 +773,9 @@ function ongletStagiaires() {
     <tr>
       <td>${s.photo_url ? `<img src="${esc(s.photo_url)}" alt="" style="width:32px;height:32px;border-radius:50%;object-fit:cover;vertical-align:middle">` : `<span class="avatar-stag" style="width:32px;height:32px;font-size:11px">${esc(initiales(s))}</span>`}</td>
       <td>${esc(s.nom)}</td><td>${esc(s.prenom)}</td><td>${esc(s.matricule || '')}</td><td>${esc(s.cis || '')}</td>
-      <td>${s.aptitude_id ? '<span class="statut-valide">✓ compte</span>' : '<span class="info">—</span>'}</td>
+      <td>${s.aptitude_id
+        ? '<span class="statut-valide" title="Identité stable liée (photo/historique partagés entre stages) — ne veut pas forcément dire qu\'un compte de connexion (email + mot de passe) a été créé. Voir 🔑 pour ça.">🪪 identité liée</span>'
+        : '<span class="info">—</span>'}</td>
       <td style="white-space:nowrap">
         <label class="btn petit secondaire" style="cursor:pointer">📷<input type="file" accept="image/*" style="display:none" onchange="uploaderPhotoStagiaire(${s.id}, this)"></label>
         <button class="btn petit secondaire" title="Compte personnel" onclick="ecranCompteStagiaire(${s.id})">🔑</button>
