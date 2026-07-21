@@ -1132,8 +1132,13 @@ async function ouvrirMonStage(stagiaireId, sessionId) {
 }
 
 // ---------- Onglet Formateurs (inscription depuis la liste d'aptitude) ----------
+// Affiche pour chaque membre de l'équipe : son grade (ISP mis en évidence — un ISP n'est pas
+// forcément formateur ou for de for, certains ne sont présents que pour l'encadrement médical),
+// sa qualification dans le domaine de la formation le cas échéant, et sa présence sur la semaine
+// (certains formateurs/ISP se succèdent, ne sont pas là toute la durée du stage).
 async function ongletFormateurs() {
   const { data: apt } = await sb.from('aptitudes').select('*, qualifications(*)');
+  window._aptFormateurs = apt || [];
   const domComp = S.formation ? S.formation.domaine_competence : null;
   const dejaIds = S.data.formateurs.map(f => f.aptitude_id).filter(Boolean);
   const dejaNoms = S.data.formateurs.map(f => f.nom);
@@ -1148,16 +1153,45 @@ async function ongletFormateurs() {
     })
     .filter(x => x.q && !dejaIds.includes(x.a.id) && !dejaNoms.includes(x.a.prenom + ' ' + x.a.nom));
 
+  const nbJours = (S.formation && S.formation.nb_jours) || 5;
+  const equipe = S.data.formateurs.map(f => {
+    const a = f.aptitude_id ? (apt || []).find(x => x.id === f.aptitude_id) : null;
+    const isISP = a && a.grade === 'ISP';
+    const qualDom = a ? (a.qualifications || []).find(q => !domComp || q.domaine === domComp) : null;
+    const badgeGrade = a
+      ? (isISP
+        ? `<span class="badge" style="background:#00838f;color:#fff">🩺 ISP</span>`
+        : a.grade ? `<span class="badge">${esc(a.grade)}</span>` : '')
+      : '';
+    const badgeRole = qualDom
+      ? `<span class="badge" style="background:${couleurRole(qualDom.role)};color:#fff">${libelleRoleQualif(qualDom.role)} ${esc(qualDom.domaine)}</span>`
+      : (isISP ? `<span class="badge" style="background:#999;color:#fff">Présence médicale (non formateur)</span>` : '');
+    const presence = (f.jour_debut || f.jour_fin)
+      ? `J${f.jour_debut || 1} → J${f.jour_fin || nbJours}`
+      : 'Toute la session';
+    return `<div class="bloc-comp">
+      <b>${esc(f.nom)}</b> ${badgeGrade} ${badgeRole}
+      <span class="info" style="margin-left:8px">📅 ${esc(presence)}</span>
+      <button class="btn petit secondaire" style="float:right;margin-left:4px" onclick="supprFormateur(${f.id})">✕</button>
+      <button class="btn petit secondaire" style="float:right" onclick="formPresenceFormateur(${f.id})">📅 Présence</button>
+      <div id="presence-form-${f.id}"></div>
+    </div>`;
+  }).join('');
+
   $('session-contenu').innerHTML = `
     <div class="carte">
       <h2>Équipe pédagogique (${S.data.formateurs.length})</h2>
-      ${S.data.formateurs.map(f => `<div class="bloc-comp">${esc(f.nom)}
-        <button class="btn petit secondaire" style="float:right" onclick="supprFormateur(${f.id})">✕</button></div>`).join('')}
+      <div class="info">🩺 ISP = infirmier sapeur-pompier — certains sont aussi qualifiés formateur/for de for (badge coloré), d'autres n'interviennent que pour l'encadrement médical (« Présence médicale »). 📅 Présence = jours où la personne est effectivement là (utile quand plusieurs formateurs se succèdent sur la semaine).</div>
+      ${equipe}
       <h3>Inscrire un formateur (liste d'aptitude${domComp ? ' — domaine ' + esc(domComp) : ''})</h3>
       ${dispo.length ? `
         <select id="fo-apt">${dispo.map(x =>
           `<option value="${x.a.id}" data-fin="${x.q.fin_validite}" data-nom="${esc(x.a.prenom + ' ' + x.a.nom)}">
-            ${esc(x.a.grade || '')} ${esc(x.a.prenom)} ${esc(x.a.nom)} (${esc(x.a.cis || '')}) — ${libelleRoleQualif(x.q.role)} ${esc(x.q.domaine)}, valide jusqu'au ${x.q.fin_validite}</option>`).join('')}</select>
+            ${esc(x.a.grade || '')} ${esc(x.a.prenom)} ${esc(x.a.nom)} (${esc(x.a.cis || '')}) — ${x.a.grade === 'ISP' ? 'ISP' : libelleRoleQualif(x.q.role)} ${esc(x.q.domaine)}, valide jusqu'au ${x.q.fin_validite}</option>`).join('')}</select>
+        <div class="ligne">
+          <div><label>Présent du jour … (facultatif, par défaut toute la session)</label><input id="fo-jd" type="number" min="1" max="${nbJours}"></div>
+          <div><label>… au jour …</label><input id="fo-jf" type="number" min="1" max="${nbJours}"></div>
+        </div>
         <button class="btn" onclick="ajouterFormateur()">Inscrire</button>`
       : `<p class="info">Personne de qualifié${domComp ? ' en ' + esc(domComp) : ''} et disponible dans la liste d'aptitude (menu « Formateurs », vision GFor).</p>`}
     </div>`;
@@ -1168,8 +1202,12 @@ async function ajouterFormateur() {
   if (!opt) return;
   if (S.session.date_fin && opt.dataset.fin < S.session.date_fin)
     return toast('Impossible : la qualification de ' + opt.dataset.nom + ' expire le ' + opt.dataset.fin + ', avant la fin de la session (' + S.session.date_fin + ').', false);
+  const jd = Number($('fo-jd').value) || null;
+  const jf = Number($('fo-jf').value) || null;
   const { error } = await sb.from('session_formateurs').insert({
-    session_id: S.session.id, nom: opt.dataset.nom, aptitude_id: Number(opt.value) });
+    session_id: S.session.id, nom: opt.dataset.nom, aptitude_id: Number(opt.value),
+    jour_debut: jd, jour_fin: jf,
+  });
   if (error) return toast(error.message, false);
   await chargerDonneesSession(S.session.id); ongletFormateurs(); toast('Formateur inscrit');
 }
@@ -1178,6 +1216,28 @@ async function supprFormateur(id) {
   const { error } = await sb.from('session_formateurs').delete().eq('id', id);
   if (error) return toast(error.message, false);
   await chargerDonneesSession(S.session.id); ongletFormateurs();
+}
+
+// Petit formulaire inline pour ajuster la présence d'un formateur déjà inscrit — pratique quand
+// deux formateurs se succèdent sur la semaine (ex. l'un J1-J3, l'autre J4-J5).
+function formPresenceFormateur(id) {
+  const f = S.data.formateurs.find(x => x.id === id);
+  if (!f) return;
+  const nbJours = (S.formation && S.formation.nb_jours) || 5;
+  $('presence-form-' + id).innerHTML = `
+    <div class="ligne" style="margin-top:6px">
+      <div><label>Présent du jour …</label><input id="pf-jd-${id}" type="number" min="1" max="${nbJours}" value="${f.jour_debut || ''}"></div>
+      <div><label>… au jour … (laisser vide = toute la session)</label><input id="pf-jf-${id}" type="number" min="1" max="${nbJours}" value="${f.jour_fin || ''}"></div>
+      <div style="align-self:flex-end"><button class="btn petit" onclick="enregistrerPresenceFormateur(${id})">Enregistrer</button></div>
+    </div>`;
+}
+
+async function enregistrerPresenceFormateur(id) {
+  const jd = Number($('pf-jd-' + id).value) || null;
+  const jf = Number($('pf-jf-' + id).value) || null;
+  const { error } = await sb.from('session_formateurs').update({ jour_debut: jd, jour_fin: jf }).eq('id', id);
+  if (error) return toast(error.message, false);
+  await chargerDonneesSession(S.session.id); ongletFormateurs(); toast('Présence mise à jour');
 }
 
 // ---------- Onglet Feuille de garde ----------
