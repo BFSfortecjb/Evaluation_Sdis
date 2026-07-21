@@ -165,10 +165,8 @@ sb.auth.onAuthStateChange(async (event) => {
 });
 
 // ---------- Entrée stagiaire (code session + choix du nom) ----------
-// codeForce : utilisé par le lien direct du chevalet (QR code, ?code=XXXX en URL) pour entrer
-// directement sans ressaisie, sans dépendre de la valeur du champ #stag-code.
-async function entreeStagiaireCode(codeForce) {
-  const code = (codeForce || $('stag-code').value.trim()).toUpperCase();
+async function entreeStagiaireCode() {
+  const code = $('stag-code').value.trim().toUpperCase();
   if (!code) return toast('Saisir le code de session', false);
   const { data: sess, error } = await sb.from('sessions').select('*').eq('code_acces', code).single();
   if (error || !sess) return toast('Code de session inconnu', false);
@@ -196,14 +194,6 @@ window.addEventListener('DOMContentLoaded', async () => {
     return;
   }
   const { data: { session } } = await sb.auth.getSession();
-  if (session) { await chargerProfil(); return; }
-  show('ecran-login');
-
-  // Lien direct chevalet (QR code) : ?code=XXXX pré-remplit et lance directement l'entrée
-  // stagiaire, sans repasser par la saisie manuelle du code de session.
-  const codeUrl = new URLSearchParams(location.search).get('code');
-  if (codeUrl) {
-    if ($('stag-code')) $('stag-code').value = codeUrl;
-    entreeStagiaireCode(codeUrl);
-  }
+  if (session) await chargerProfil();
+  else show('ecran-login');
 });

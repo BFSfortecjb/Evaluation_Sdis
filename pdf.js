@@ -708,9 +708,10 @@ async function genererLivretCertification(stagiaireId) {
 // de la page, matérialisée par un trait pointillé) :
 //  - moitié basse (à l'endroit une fois plié posé sur la table) : écusson + prénom NOM + CIS.
 //  - moitié haute (tournée à 180°, pour se lire à l'endroit une fois le chevalet plié et posé
-//    debout comme un marque-place) : un QR code unique menant à l'application (lien direct avec
-//    le code de session, ?code=XXXX — voir entreeStagiaireCode() dans core.js) + le chronogramme
-//    de la semaine (Jour × Matin/Après-midi). Le chronogramme n'est imprimé que pour les
+//    debout comme un marque-place) : un QR code unique menant à la page d'accueil de l'application
+//    (le stagiaire se connecte ensuite avec les identifiants qui lui sont fournis par ailleurs,
+//    code de session ou compte personnel — le QR ne fait qu'ouvrir l'appli, pas de connexion
+//    automatique) + le chronogramme de la semaine (Jour × Matin/Après-midi). Le chronogramme n'est imprimé que pour les
 //    formations de 7 jours maximum ; au-delà, un renvoi invite à consulter l'appli (le chevalet
 //    étant une pièce imprimée à l'avance, un programme sur 8 jours+ ne tiendrait plus lisiblement
 //    dessus, et les stagiaires ont de toute façon accès au chronogramme complet dans l'appli,
@@ -828,7 +829,9 @@ async function genererChevalets() {
 
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-  const urlBase = location.origin + location.pathname + '?code=' + encodeURIComponent(S.session.code_acces);
+  // Le QR mène simplement à la page d'accueil de l'app (pas de code en clair dans l'URL) : le
+  // stagiaire se connecte ensuite avec le code de session ou son compte personnel, fourni à part.
+  const urlBase = location.origin + location.pathname;
   const hMM = 148.5, wMM = 210;
 
   for (let i = 0; i < stagiaires.length; i++) {
