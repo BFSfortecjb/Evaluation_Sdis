@@ -202,7 +202,7 @@ function _rendreOngletPlanning() {
             <div class="libelle-bloc">${b.modele_id ? '🔒 ' : ''}${esc(b.libelle)}</div>
             ${b.annotation ? `<div class="annotation-bloc">🗒 ${esc(b.annotation)}</div>` : ''}
             <div class="actions-bloc">
-              <span onclick="formBlocPlanning(${b.id})">Modifier</span>
+              <span onclick="formBlocPlanning(${b.id})">${b.modele_id ? 'Annoter' : 'Modifier'}</span>
               <span onclick="supprimerBlocPlanning(${b.id})">Supprimer</span>
             </div>
           </div>`).join('')}
@@ -239,20 +239,24 @@ function formBlocPlanning(blocId, jour, demi) {
   const b = blocId ? (S.data.blocsPlanning || []).find(x => x.id === blocId) : null;
   const jourVal = b ? b.jour : jour;
   const demiVal = b ? b.demi_journee : demi;
-  // Un bloc issu d'un modèle imposé garde son libellé fixe (défini par le GFor) : seule
-  // l'annotation reste modifiable par le RP, pour ne pas faire diverger le programme imposé.
+  // Un bloc issu d'un modèle imposé garde son libellé fixe (défini par le GFor) : pour lui, pas
+  // de champ libellé du tout (désactivé = source de confusion, on l'enlève carrément) — juste
+  // l'annotation, à destination des formateurs (ex. matériel à prévoir, salle, intervenant...).
   const verrouille = b && b.modele_id;
   $('planning-form').innerHTML = `
     <div class="carte" style="background:#f7f7f9">
-      <h3>${b ? 'Modifier le bloc' : 'Nouveau bloc'} — ${esc(jourVal)} ${demiVal === 'matin' ? 'matin' : 'après-midi'}</h3>
-      ${verrouille ? `<div class="info">🔒 Bloc imposé par la formation — le libellé n'est modifiable que depuis Paramètres formations → Planning imposé.</div>` : ''}
+      <h3>${verrouille ? '🔒 Annoter — ' + esc(b.libelle) : (b ? 'Modifier le bloc' : 'Nouveau bloc')} — ${esc(jourVal)} ${demiVal === 'matin' ? 'matin' : 'après-midi'}</h3>
+      ${verrouille ? `<div class="info">Bloc imposé par la formation — le libellé se change uniquement depuis Paramètres formations → Planning imposé. Utilise l'annotation ci-dessous pour donner aux formateurs les informations d'organisation propres à cette session (matériel à prévoir, salle, intervenant extérieur...).</div>` : `
       <label>Thématique / activité (visible du stagiaire)</label>
-      <input id="pf-libelle" value="${b ? esc(b.libelle) : ''}" ${verrouille ? 'disabled' : ''}>
-      <label>Annotation formateur (facultatif, jamais visible du stagiaire)</label>
+      <input id="pf-libelle" value="${b ? esc(b.libelle) : ''}">`}
+      <label>Annotation ${verrouille ? '' : 'formateur (facultatif)'} — jamais visible du stagiaire</label>
       <textarea id="pf-annotation">${b && b.annotation ? esc(b.annotation) : ''}</textarea>
       <button class="btn" onclick="enregistrerBlocPlanning(${blocId || 'null'}, '${jourVal}', '${demiVal}')">Enregistrer</button>
       <button class="btn secondaire" onclick="$('planning-form').innerHTML=''">Annuler</button>
     </div>`;
+  // Le formulaire s'ouvre en bas de l'onglet, sous toute la grille : sans ce scroll, cliquer
+  // Modifier/Annoter pouvait donner l'impression que le bouton ne faisait rien.
+  $('planning-form').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 async function enregistrerBlocPlanning(blocId, jour, demi) {
