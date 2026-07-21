@@ -14,6 +14,32 @@
 // marge via l'annotation d'un bloc ; ce n'est qu'un repère, pas une contrainte de saisie.
 const HORAIRES_DEMI = { matin: '8h – 12h', apres_midi: '13h – 17h' };
 
+// Durée indicative d'un bloc (purement informative, pour que le RP indique par exemple 15 min
+// pour un point rapide ou 1h30 pour un atelier) — quelques durées courantes en présélection, plus
+// une option « Personnalisée » pour saisir une valeur exacte en minutes.
+const PRESETS_DUREE_MIN = [15, 30, 45, 60, 90, 120, 180, 240];
+function _formatDuree(min) {
+  if (!min) return '';
+  if (min < 60) return min + ' min';
+  const h = Math.floor(min / 60), m = min % 60;
+  return h + 'h' + (m ? String(m).padStart(2, '0') : '');
+}
+function _optionsDuree(valeurActuelle) {
+  const v = valeurActuelle || null;
+  let opts = `<option value="" ${!v ? 'selected' : ''}>Non précisée</option>`;
+  opts += PRESETS_DUREE_MIN.map(m => `<option value="${m}" ${v === m ? 'selected' : ''}>${_formatDuree(m)}</option>`).join('');
+  const custom = v && !PRESETS_DUREE_MIN.includes(v);
+  opts += `<option value="autre" ${custom ? 'selected' : ''}>Personnalisée (min)…</option>`;
+  return opts;
+}
+// Lit la durée choisie dans un couple <select> + <input> (personnalisée), identifiés par leurs id.
+function _lireDureeChamp(idSelect, idAutre) {
+  const sel = $(idSelect) ? $(idSelect).value : '';
+  if (!sel) return null;
+  if (sel === 'autre') return Number($(idAutre).value) || null;
+  return Number(sel);
+}
+
 // ---------- Blocs de planning imposés (GFor, Paramètres formations) ----------
 // Modèles définis au niveau de la formation (pas d'une session précise) : la partie « imposée »
 // du programme, commune à toutes les sessions de cette formation. Le RP les place ensuite
@@ -48,6 +74,10 @@ async function ecranBlocsPlanningModeles(formationId) {
         <input id="bpm-jf-${m.id}" type="number" min="1" style="width:52px" value="${m.jour_fin || m.jour_debut || 1}" title="Jour de fin (J..)">
       </td>
       <td style="white-space:nowrap">
+        <select id="bpm-duree-${m.id}" onchange="$('bpm-duree-autre-${m.id}').style.display = this.value==='autre' ? '' : 'none'">${_optionsDuree(m.duree_minutes)}</select>
+        <input id="bpm-duree-autre-${m.id}" type="number" min="1" placeholder="min" style="width:60px;display:${(m.duree_minutes && !PRESETS_DUREE_MIN.includes(m.duree_minutes)) ? '' : 'none'}" value="${(m.duree_minutes && !PRESETS_DUREE_MIN.includes(m.duree_minutes)) ? m.duree_minutes : ''}">
+      </td>
+      <td style="white-space:nowrap">
         <button class="btn petit secondaire" onclick="enregistrerBlocModele(${m.id})">💾</button>
         <button class="btn petit secondaire" onclick="supprBlocModele(${m.id})">✕</button>
       </td>
@@ -61,8 +91,8 @@ async function ecranBlocsPlanningModeles(formationId) {
       (ex. réactivation de mémoire tous les matins de J2 à J5). Un bloc « libre » reste à placer à la main par le RP,
       via la réserve « Blocs à placer » de l'onglet Chronogramme.</div>
     <div class="table-scroll"><table>
-      <tr><th>Ordre</th><th>Libellé</th><th>Annotation (facultatif)</th><th>Placement</th><th>Jours (si fixe)</th><th></th></tr>
-      ${lignes || '<tr><td colspan="6" class="info">Aucun bloc imposé pour cette formation.</td></tr>'}
+      <tr><th>Ordre</th><th>Libellé</th><th>Annotation (facultatif)</th><th>Placement</th><th>Jours (si fixe)</th><th>Durée</th><th></th></tr>
+      ${lignes || '<tr><td colspan="7" class="info">Aucun bloc imposé pour cette formation.</td></tr>'}
     </table></div>
     <h3>Ajouter un bloc imposé</h3>
     <div class="ligne">
@@ -75,6 +105,10 @@ async function ecranBlocsPlanningModeles(formationId) {
       <div id="bpm-new-jours" style="display:none">
         <label>Du jour … au jour …</label>
         <div class="ligne"><input id="bpm-new-jd" type="number" min="1" value="1"><input id="bpm-new-jf" type="number" min="1" value="1"></div>
+      </div>
+      <div><label>Durée par défaut</label>
+        <select id="bpm-new-duree" onchange="$('bpm-new-duree-autre').style.display = this.value==='autre' ? '' : 'none'">${_optionsDuree(null)}</select>
+        <input id="bpm-new-duree-autre" type="number" min="1" placeholder="min" style="display:none;margin-top:4px">
       </div>
       <div style="align-self:flex-end"><button class="btn petit" onclick="ajouterBlocModele(${formationId})">➕ Ajouter</button></div>
     </div>
@@ -90,6 +124,7 @@ async function enregistrerBlocModele(id) {
     demi_journee: demi,
     jour_debut: demi ? (Number($('bpm-jd-' + id).value) || 1) : null,
     jour_fin: demi ? (Number($('bpm-jf-' + id).value) || Number($('bpm-jd-' + id).value) || 1) : null,
+    duree_minutes: _lireDureeChamp('bpm-duree-' + id, 'bpm-duree-autre-' + id),
   }).eq('id', id);
   if (error) return toast(error.message, false);
   toast('Bloc imposé mis à jour');
@@ -106,6 +141,7 @@ async function ajouterBlocModele(formationId) {
     demi_journee: demi,
     jour_debut: demi ? (Number($('bpm-new-jd').value) || 1) : null,
     jour_fin: demi ? (Number($('bpm-new-jf').value) || Number($('bpm-new-jd').value) || 1) : null,
+    duree_minutes: _lireDureeChamp('bpm-new-duree', 'bpm-new-duree-autre'),
   });
   if (error) return toast(error.message, false);
   toast('Bloc imposé ajouté');
@@ -171,7 +207,7 @@ async function assurerBlocsPlanningFixes() {
       const ordre = _blocsPlanningCellule(jourStr, m.demi_journee).length;
       const { error: errIns } = await sb.from('blocs_planning').insert({
         session_id: S.session.id, jour: jourStr, demi_journee: m.demi_journee, ordre,
-        libelle: m.libelle, annotation: m.annotation, modele_id: m.id,
+        libelle: m.libelle, annotation: m.annotation, duree_minutes: m.duree_minutes, modele_id: m.id,
       });
       if (!errIns) cree = true;
     }
@@ -199,7 +235,7 @@ function _rendreOngletPlanning() {
         ondragleave="this.classList.remove('survol')" ondrop="deposerBlocPlanning(event, '${j}', '${demiId}')">
         ${blocs.map((b, i) => `
           <div class="bloc-planning" draggable="true" ondragstart='event.dataTransfer.setData("text/plain", JSON.stringify({type:"bloc", id:${b.id}}))'>
-            <div class="libelle-bloc">${b.modele_id ? '🔒 ' : ''}${esc(b.libelle)}</div>
+            <div class="libelle-bloc">${b.modele_id ? '🔒 ' : ''}${esc(b.libelle)}${b.duree_minutes ? ` <span class="duree-bloc">⏱ ${_formatDuree(b.duree_minutes)}</span>` : ''}</div>
             ${b.annotation ? `<div class="annotation-bloc">🗒 ${esc(b.annotation)}</div>` : ''}
             <div class="actions-bloc">
               ${i > 0 ? `<span onclick="deplacerBlocPlanning(${b.id}, -1)" title="Monter">▲</span>` : ''}
@@ -251,6 +287,9 @@ function formBlocPlanning(blocId, jour, demi) {
       ${verrouille ? `<div class="info">Bloc imposé par la formation — le libellé se change uniquement depuis Paramètres formations → Planning imposé. Utilise l'annotation ci-dessous pour donner aux formateurs les informations d'organisation propres à cette session (matériel à prévoir, salle, intervenant extérieur...).</div>` : `
       <label>Thématique / activité (visible du stagiaire)</label>
       <input id="pf-libelle" value="${b ? esc(b.libelle) : ''}">`}
+      <label>Durée (facultatif, indicative)</label>
+      <select id="pf-duree" onchange="$('pf-duree-autre').style.display = this.value==='autre' ? '' : 'none'">${_optionsDuree(b?.duree_minutes)}</select>
+      <input id="pf-duree-autre" type="number" min="1" placeholder="Durée en minutes" style="margin-top:4px;display:${(b?.duree_minutes && !PRESETS_DUREE_MIN.includes(b.duree_minutes)) ? '' : 'none'}" value="${(b?.duree_minutes && !PRESETS_DUREE_MIN.includes(b.duree_minutes)) ? b.duree_minutes : ''}">
       <label>Annotation ${verrouille ? '' : 'formateur (facultatif)'} — jamais visible du stagiaire</label>
       <textarea id="pf-annotation">${b && b.annotation ? esc(b.annotation) : ''}</textarea>
       <button class="btn" onclick="enregistrerBlocPlanning(${blocId || 'null'}, '${jourVal}', '${demiVal}')">Enregistrer</button>
@@ -263,10 +302,12 @@ function formBlocPlanning(blocId, jour, demi) {
 
 async function enregistrerBlocPlanning(blocId, jour, demi) {
   const annotation = $('pf-annotation').value.trim() || null;
+  const duree_minutes = _lireDureeChamp('pf-duree', 'pf-duree-autre');
   if (blocId) {
     const b = (S.data.blocsPlanning || []).find(x => x.id === blocId);
-    // Bloc imposé : le libellé ne se modifie pas ici (champ désactivé), seule l'annotation change.
-    const payload = (b && b.modele_id) ? { annotation } : { libelle: $('pf-libelle').value.trim(), annotation };
+    // Bloc imposé : le libellé ne se modifie pas ici (champ absent du formulaire), seuls
+    // l'annotation et la durée changent.
+    const payload = (b && b.modele_id) ? { annotation, duree_minutes } : { libelle: $('pf-libelle').value.trim(), annotation, duree_minutes };
     if (!payload.libelle && !(b && b.modele_id)) return toast('Thématique obligatoire', false);
     const { error } = await sb.from('blocs_planning').update(payload).eq('id', blocId);
     if (error) return toast(error.message, false);
@@ -275,7 +316,7 @@ async function enregistrerBlocPlanning(blocId, jour, demi) {
     if (!libelle) return toast('Thématique obligatoire', false);
     const ordre = _blocsPlanningCellule(jour, demi).length;
     const { error } = await sb.from('blocs_planning').insert({
-      session_id: S.session.id, jour, demi_journee: demi, ordre, libelle, annotation,
+      session_id: S.session.id, jour, demi_journee: demi, ordre, libelle, annotation, duree_minutes,
     });
     if (error) return toast(error.message, false);
   }
@@ -336,7 +377,7 @@ async function deposerBlocPlanning(ev, jour, demi) {
     if (!m) return;
     const { error } = await sb.from('blocs_planning').insert({
       session_id: S.session.id, jour, demi_journee: demi, ordre,
-      libelle: m.libelle, annotation: m.annotation, modele_id: m.id,
+      libelle: m.libelle, annotation: m.annotation, duree_minutes: m.duree_minutes, modele_id: m.id,
     });
     if (error) return toast(error.message, false);
   } else {
@@ -354,7 +395,7 @@ async function deposerBlocPlanning(ev, jour, demi) {
 function blocStagiaireChronogramme() {
   const jours = joursFormation();
   const lignes = jours.map(j => {
-    const txt = demi => _blocsPlanningCellule(j, demi).map(b => esc(b.libelle)).join('<br>') || '—';
+    const txt = demi => _blocsPlanningCellule(j, demi).map(b => esc(b.libelle) + (b.duree_minutes ? ' (' + _formatDuree(b.duree_minutes) + ')' : '')).join('<br>') || '—';
     return `<tr><td><b>${esc(j)}</b></td><td>${txt('matin')}</td><td>${txt('apres_midi')}</td></tr>`;
   }).join('');
   return `<div class="carte">

@@ -813,7 +813,8 @@ function _pdfCanvasHautChevalet(s, urlApp) {
         ctx.fillStyle = '#222';
         ctx.font = mm(2.3) + 'px Arial';
         blocs.slice(0, 4).forEach((b, bi) => {
-          ctx.fillText(String(b.libelle).slice(0, 22), cellX + mm(1), cellY + mm(3.2) + bi * mm(3.4), colW - mm(2));
+          const suffixe = (b.duree_minutes && typeof _formatDuree === 'function') ? ' (' + _formatDuree(b.duree_minutes) + ')' : '';
+          ctx.fillText(String(b.libelle).slice(0, 20) + suffixe, cellX + mm(1), cellY + mm(3.2) + bi * mm(3.4), colW - mm(2));
         });
       });
     });
