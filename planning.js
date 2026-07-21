@@ -229,7 +229,7 @@ function _rendreOngletPlanning() {
   const jours = joursFormation();
   const demiJournees = [['matin', 'Matin (' + HORAIRES_DEMI.matin + ')'], ['apres_midi', 'Après-midi (' + HORAIRES_DEMI.apres_midi + ')']];
   const reserve = lectureSeule ? [] : _modelesNonPlaces();
-  const jourISP = (S.session && S.session.jour_isp) ? 'J' + S.session.jour_isp : null;
+  const joursISP = (typeof joursPresenceISP === 'function') ? joursPresenceISP() : new Set();
 
   let cellules = '';
   demiJournees.forEach(([demiId, demiLbl]) => {
@@ -238,7 +238,7 @@ function _rendreOngletPlanning() {
       const blocs = _blocsPlanningCellule(j, demiId);
       const attrsCellule = lectureSeule ? '' : `ondragover="event.preventDefault(); this.classList.add('survol')"
         ondragleave="this.classList.remove('survol')" ondrop="deposerBlocPlanning(event, '${j}', '${demiId}')"`;
-      const styleISP = (j === jourISP) ? ' style="background:#e2f5e5"' : '';
+      const styleISP = joursISP.has(j) ? ' style="background:#e2f5e5"' : '';
       cellules += `<div class="planning-cellule"${styleISP} ${attrsCellule}>
         ${blocs.map((b, i) => `
           <div class="bloc-planning" ${lectureSeule ? '' : `draggable="true" ondragstart='event.dataTransfer.setData("text/plain", JSON.stringify({type:"bloc", id:${b.id}}))'`}>
@@ -263,7 +263,7 @@ function _rendreOngletPlanning() {
       <h2>Chronogramme / Planning</h2>
       <div class="info">${lectureSeule
         ? 'Consultation du programme de la semaine. 🔒 = bloc imposé par la formation · 🗒 = annotation de l\'encadrement, jamais visible du stagiaire.'
-        : 'Glisse-dépose les blocs entre jours et demi-journées pour réorganiser le programme. 🔒 = bloc imposé (défini par le GFor pour cette formation) · 🗒 = annotation réservée à l\'encadrement, jamais visible du stagiaire.'}${jourISP ? ' · 🩺 fond vert = jour de présence ISP (réglable dans Paramètres du stage).' : ''}</div>
+        : 'Glisse-dépose les blocs entre jours et demi-journées pour réorganiser le programme. 🔒 = bloc imposé (défini par le GFor pour cette formation) · 🗒 = annotation réservée à l\'encadrement, jamais visible du stagiaire.'}${joursISP.size ? ' · 🩺 fond vert = jour(s) de présence ISP (réglable dans l\'onglet Formateurs).' : ''}</div>
       ${reserve.length ? `
       <h3>Blocs à placer (imposés par la formation)</h3>
       <div class="info">Glisse ces blocs dans le chronogramme ci-dessous, au jour et à la demi-journée de ton choix.</div>
@@ -275,7 +275,7 @@ function _rendreOngletPlanning() {
       </div>` : ''}
       <div class="table-scroll-planning">
         <div class="grille-planning" style="grid-template-columns: 70px repeat(${jours.length}, 1fr)">
-          <div></div>${jours.map(j => `<div class="planning-entete-jour"${j === jourISP ? ' style="background:#8bc78f;color:#fff"' : ''}${j === jourISP ? ' title="Jour de présence ISP"' : ''}>${esc(j)}${j === jourISP ? ' 🩺' : ''}</div>`).join('')}
+          <div></div>${jours.map(j => `<div class="planning-entete-jour"${joursISP.has(j) ? ' style="background:#8bc78f;color:#fff" title="Jour de présence ISP"' : ''}>${esc(j)}${joursISP.has(j) ? ' 🩺' : ''}</div>`).join('')}
           ${cellules}
         </div>
       </div>
@@ -421,15 +421,15 @@ async function deposerBlocPlanning(ev, jour, demi) {
 // avec la vue encadrement (ongletPlanning).
 function blocStagiaireChronogramme() {
   const jours = joursFormation();
-  const jourISP = (S.session && S.session.jour_isp) ? 'J' + S.session.jour_isp : null;
+  const joursISP = (typeof joursPresenceISP === 'function') ? joursPresenceISP() : new Set();
   const lignes = jours.map(j => {
     const txt = demi => _blocsPlanningCellule(j, demi).map(b => esc(b.libelle) + (b.duree_minutes ? ' (' + _formatDuree(b.duree_minutes) + ')' : '')).join('<br>') || '—';
-    const styleISP = (j === jourISP) ? ' style="background:#e2f5e5"' : '';
-    return `<tr${styleISP}><td><b>${esc(j)}</b>${j === jourISP ? ' 🩺' : ''}</td><td>${txt('matin')}</td><td>${txt('apres_midi')}</td></tr>`;
+    const styleISP = joursISP.has(j) ? ' style="background:#e2f5e5"' : '';
+    return `<tr${styleISP}><td><b>${esc(j)}</b>${joursISP.has(j) ? ' 🩺' : ''}</td><td>${txt('matin')}</td><td>${txt('apres_midi')}</td></tr>`;
   }).join('');
   return `<div class="carte">
     <h2>Programme de la semaine</h2>
-    ${jourISP ? `<div class="info">🩺 = jour de présence de l'infirmier sapeur-pompier (ISP).</div>` : ''}
+    ${joursISP.size ? `<div class="info">🩺 = jour de présence de l'infirmier sapeur-pompier (ISP).</div>` : ''}
     <div class="table-scroll"><table>
       <tr><th>Jour</th><th>Matin (${esc(HORAIRES_DEMI.matin)})</th><th>Après-midi (${esc(HORAIRES_DEMI.apres_midi)})</th></tr>
       ${lignes}

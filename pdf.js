@@ -698,9 +698,240 @@ async function genererLivretCertification(stagiaireId) {
     headStyles: { fillColor: ROUGE_SDIS },
   });
 
+  // ---------- Entretien de fin de stage (si réalisé et signé) ----------
+  const entretienFin = (S.data.entretiens || []).find(e => e.stagiaire_id === stagiaireId && e.type === 'fin_stage' && e.signe_le);
+  if (entretienFin && entretienFin.commentaire) {
+    doc.addPage();
+    _pdfEnTete(doc, 'Entretien de fin de stage', s.prenom + ' ' + s.nom);
+    let yEnt = 32;
+    doc.setFontSize(10);
+    doc.text(`Entretien du ${entretienFin.date_entretien || '—'}`, 14, yEnt); yEnt += 8;
+    doc.setFontSize(9);
+    const lignesEnt = doc.splitTextToSize(entretienFin.commentaire, CONTENU);
+    doc.text(lignesEnt, 14, yEnt);
+  }
+
   _pdfPiedDePage(doc);
   doc.save(`Livret_certification_${s.nom}_${s.prenom}.pdf`.replace(/\s+/g, '_'));
   toast('Livret de certification généré');
+}
+
+// ---------- Entretiens individuels (compte-rendu signé) + livrables ajournement/résolution (6/7) ----------
+// Un entretien signé (stagiaire + RP) est archivé sous forme de données en base — le PDF est
+// régénéré à la demande à partir de ces données (même principe que la Fiche de suivi ou le Livret,
+// jamais stocké comme fichier séparé), ce qui le rend consultable depuis n'importe quelle session
+// (archives, task #38) sans dépendre d'un espace de stockage de fichiers.
+function _pdfBlocSignature(doc, x, y, largeur, titre, dataURL, legende) {
+  doc.setFontSize(9);
+  doc.setTextColor(80, 80, 80);
+  doc.text(titre, x, y);
+  doc.setDrawColor(200, 200, 200);
+  doc.rect(x, y + 2, largeur, 24);
+  if (dataURL) {
+    try {
+      doc.addImage(dataURL, 'PNG', x + 2, y + 4, largeur - 4, 20, undefined, 'FAST');
+    } catch (e) { /* image invalide, on laisse le cadre vide */ }
+  } else {
+    doc.setFontSize(8);
+    doc.text('Non signé', x + 2, y + 15);
+  }
+  if (legende) {
+    doc.setFontSize(8);
+    doc.setTextColor(120, 120, 120);
+    doc.text(legende, x, y + 30);
+  }
+  doc.setTextColor(30, 30, 30);
+}
+
+async function genererPDFEntretien(stagiaireId, type) {
+  if (!window.jspdf) return toast('Bibliothèque PDF non chargée', false);
+  const s = S.data.stagiaires.find(x => x.id === stagiaireId);
+  const e = (S.data.entretiens || []).find(x => x.stagiaire_id === stagiaireId && x.type === type);
+  if (!s || !e) return toast('Entretien introuvable', false);
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const titreType = type === 'mi_parcours' ? 'Entretien individuel — mi-parcours' : 'Entretien individuel — fin de stage';
+  _pdfEnTete(doc, titreType, (S.formation ? S.formation.libelle : '') + ' — ' + (S.session ? (S.session.lieu || '') : ''));
+
+  let y = 32;
+  doc.setFontSize(11);
+  doc.text(`Stagiaire : ${s.prenom} ${s.nom}`, 14, y); y += 7;
+  doc.text(`Date de l'entretien : ${e.date_entretien || '—'}`, 14, y); y += 10;
+
+  doc.setFontSize(10);
+  doc.text('Commentaire :', 14, y); y += 6;
+  doc.setFontSize(9);
+  const lignesCommentaire = doc.splitTextToSize(e.commentaire || '—', 180);
+  doc.text(lignesCommentaire, 14, y); y += lignesCommentaire.length * 5 + 8;
+
+  doc.setFontSize(10);
+  const libDec = e.decision === 'ajournement' ? 'Ajournement' : e.decision === 'resolution' ? 'Résolution' : 'Normale (pas de suite particulière)';
+  doc.text(`Décision : ${libDec}`, 14, y); y += 8;
+  if (e.decision !== 'normal' && e.decision_detail) {
+    doc.setFontSize(9);
+    const lignesDetail = doc.splitTextToSize(e.decision_detail, 180);
+    doc.text(lignesDetail, 14, y); y += lignesDetail.length * 5 + 8;
+  }
+
+  y = Math.max(y, 220);
+  _pdfBlocSignature(doc, 14, y, 85, 'Signature du stagiaire', e.signature_stagiaire, `${s.prenom} ${s.nom}`);
+  _pdfBlocSignature(doc, 110, y, 85, 'Signature du RP', e.signature_rp, `${e.rp_nom || ''} — signé le ${e.signe_le ? e.signe_le.slice(0, 10) : ''}`);
+
+  _pdfPiedDePage(doc);
+  doc.save(`Entretien_${type}_${s.nom}_${s.prenom}.pdf`.replace(/\s+/g, '_'));
+  toast('Compte-rendu d\'entretien généré');
+}
+
+async function genererPDFDecisionEntretien(stagiaireId, type) {
+  if (!window.jspdf) return toast('Bibliothèque PDF non chargée', false);
+  const s = S.data.stagiaires.find(x => x.id === stagiaireId);
+  const e = (S.data.entretiens || []).find(x => x.stagiaire_id === stagiaireId && x.type === type);
+  if (!s || !e || e.decision === 'normal') return toast('Aucune décision d\'ajournement/résolution pour cet entretien', false);
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const estAjournement = e.decision === 'ajournement';
+  const titre = estAjournement ? "Fiche d'ajournement" : 'Fiche de résolution';
+  _pdfEnTete(doc, titre, (S.formation ? S.formation.libelle : '') + ' — ' + (S.session ? (S.session.lieu || '') : ''));
+
+  let y = 32;
+  doc.setFontSize(11);
+  doc.text(`Stagiaire : ${s.prenom} ${s.nom}`, 14, y); y += 7;
+  doc.text(`Entretien concerné : ${type === 'mi_parcours' ? 'mi-parcours' : 'fin de stage'} du ${e.date_entretien || '—'}`, 14, y); y += 10;
+
+  doc.setFontSize(10);
+  doc.text(estAjournement ? 'Motifs de l\'ajournement :' : 'Mesures de résolution :', 14, y); y += 6;
+  doc.setFontSize(9);
+  const lignes = doc.splitTextToSize(e.decision_detail || '—', 180);
+  doc.text(lignes, 14, y); y += lignes.length * 5 + 8;
+
+  if (e.commentaire) {
+    doc.setFontSize(10);
+    doc.text('Rappel du commentaire de l\'entretien :', 14, y); y += 6;
+    doc.setFontSize(9);
+    const lignesC = doc.splitTextToSize(e.commentaire, 180);
+    doc.text(lignesC, 14, y); y += lignesC.length * 5 + 8;
+  }
+
+  y = Math.max(y, 220);
+  _pdfBlocSignature(doc, 14, y, 85, 'Signature du stagiaire', e.signature_stagiaire, `${s.prenom} ${s.nom}`);
+  _pdfBlocSignature(doc, 110, y, 85, 'Signature du RP', e.signature_rp, `${e.rp_nom || ''} — signé le ${e.signe_le ? e.signe_le.slice(0, 10) : ''}`);
+
+  _pdfPiedDePage(doc);
+  doc.save(`${titre.replace(/\s+/g, '_')}_${s.nom}_${s.prenom}.pdf`.replace(/'/g, ''));
+  toast(titre + ' générée');
+}
+
+// ---------- PV de stage (livrable 9, modèle SDIS29) ----------
+// Généré uniquement quand tous les entretiens individuels et toutes les signatures du jury sont
+// faits (vérifié côté app.js avant l'appel). Reprend le modèle papier fourni : en-tête SDIS29,
+// tableau des candidats (civilité/identité/avis/observations), compteurs, tableau de l'équipe
+// pédagogique (jury) avec présence partielle et signature.
+async function genererPVStage() {
+  if (!window.jspdf) return toast('Bibliothèque PDF non chargée', false);
+  const sess = S.session;
+  if (!sess) return toast('Session introuvable', false);
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const largeur = doc.internal.pageSize.getWidth();
+
+  let y = 12;
+  try { doc.addImage(LOGO_SDIS29, 'PNG', 14, y, 18, 18); } catch (e) { /* logo optionnel */ }
+  doc.setFontSize(9);
+  doc.setTextColor(30, 30, 30);
+  doc.text("Service Départemental d'Incendie et de Secours du Finistère", 36, y + 4);
+  doc.text('58 avenue de Kéradennec', 36, y + 9);
+  doc.text('29337 QUIMPER Cedex', 36, y + 14);
+  y += 26;
+
+  doc.setFillColor(...ROUGE_SDIS);
+  doc.rect(0, y, largeur, 9, 'F');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(13);
+  doc.text('PROCÈS VERBAL PAE FPSE Formation Continue', largeur / 2, y + 6, { align: 'center' });
+  y += 15;
+  doc.setTextColor(30, 30, 30);
+  doc.setFontSize(11);
+  const annee = sess.date_debut ? sess.date_debut.slice(0, 4) : String(new Date().getFullYear());
+  doc.text(`« Programme ${annee} »`, largeur / 2, y, { align: 'center' });
+  y += 10;
+
+  doc.setFontSize(9);
+  doc.text(`Lieu : ${sess.lieu || '—'}`, 14, y);
+  doc.text(`Date(s) de la formation : ${sess.date_debut || '?'} → ${sess.date_fin || '?'}`, 110, y);
+  y += 6;
+  doc.text(`Nb total d'heures de formation réalisées : ${sess.nb_heures_formation ?? '—'}`, 14, y);
+  doc.text(`Nom + Signature (GFor) : ${sess.gfor_signataire || '—'}`, 110, y);
+  if (sess.gfor_signature) {
+    try { doc.addImage(sess.gfor_signature, 'PNG', 155, y - 4, 40, 12); } catch (e) { /* signature invalide */ }
+  }
+  y += 6;
+  doc.text(`Date du PV : ${new Date().toLocaleDateString('fr-FR')}`, 14, y);
+  doc.text(`Réf. d'enregistrement (GFor) : ${sess.ref_enregistrement || '—'}`, 110, y);
+  y += 10;
+
+  // ---------- Liste des candidats ----------
+  const lignesCandidats = S.data.stagiaires.map(s => {
+    const avis = s.decision_jury === 'valide' ? 'APTE' : s.decision_jury === 'non_valide' ? 'INAPTE' : '—';
+    const naissance = (s.lieu_naissance || '—') + (s.departement_naissance ? ' (' + s.departement_naissance + ')' : '');
+    return [s.civilite || '—', `${s.nom} ${s.prenom}`, s.date_naissance || '—', naissance, avis, s.observations_pv || '—'];
+  });
+  doc.autoTable({
+    startY: y,
+    head: [['Civilité', 'Nom Prénom', 'Date naissance', 'Lieu de naissance + Dpt', 'Avis équipe péda.', 'Observations']],
+    body: lignesCandidats,
+    styles: { fontSize: 8, cellPadding: 1.5 },
+    headStyles: { fillColor: ROUGE_SDIS },
+    margin: { left: 14, right: 14 },
+  });
+  y = doc.lastAutoTable.finalY + 4;
+
+  const inscrits = S.data.stagiaires.length;
+  const admis = S.data.stagiaires.filter(s => s.decision_jury === 'valide').length;
+  doc.setFontSize(9);
+  doc.text(`INSCRITS : ${inscrits}`, 14, y);
+  doc.text(`PRÉSENTS (du 1er au dernier jour) : ${inscrits}`, 80, y);
+  doc.text(`TOTAL ADMIS : ${admis}`, 155, y);
+  y += 10;
+
+  // ---------- Membres de l'équipe pédagogique (jury) ----------
+  const jury = S.data.formateurs.filter(f => f.membre_jury);
+  const nbJours = (S.formation && S.formation.nb_jours) || 5;
+  const domComp = S.formation ? S.formation.domaine_competence : null;
+  const aptiIds = jury.map(f => f.aptitude_id).filter(Boolean);
+  let aptMap = {};
+  if (aptiIds.length) {
+    const { data: apt } = await sb.from('aptitudes').select('*, qualifications(*)').in('id', aptiIds);
+    (apt || []).forEach(a => { aptMap[a.id] = a; });
+  }
+  const lignesJury = jury.map(f => {
+    const a = f.aptitude_id ? aptMap[f.aptitude_id] : null;
+    const qual = a ? ((a.qualifications || []).find(q => !domComp || q.domaine === domComp) || (a.qualifications || [])[0]) : null;
+    const qualLabel = qual ? (libelleRoleQualif(qual.role) + (qual.domaine ? ' ' + qual.domaine : '')) : '—';
+    const presence = (f.jour_debut || f.jour_fin) ? `J${f.jour_debut || 1} → J${f.jour_fin || nbJours}` : '—';
+    return [f.nom, qualLabel, presence, ''];
+  });
+  doc.autoTable({
+    startY: y,
+    head: [['Nom Prénom', 'Qualification', 'Si présence partielle', 'Signature']],
+    body: lignesJury,
+    styles: { fontSize: 8, cellPadding: 1.5, minCellHeight: 14 },
+    headStyles: { fillColor: ROUGE_SDIS },
+    margin: { left: 14, right: 14 },
+    columnStyles: { 3: { cellWidth: 42 } },
+    didDrawCell: (data) => {
+      if (data.section === 'body' && data.column.index === 3) {
+        const f = jury[data.row.index];
+        if (f && f.signature_jury) {
+          try { doc.addImage(f.signature_jury, 'PNG', data.cell.x + 1, data.cell.y + 1, data.cell.width - 2, data.cell.height - 2); } catch (e) { /* signature invalide */ }
+        }
+      }
+    },
+  });
+
+  _pdfPiedDePage(doc);
+  doc.save(`PV_stage_${(S.formation ? S.formation.code : 'stage')}_${sess.code_acces}.pdf`.replace(/\s+/g, '_'));
 }
 
 // ---------- Chevalet de formation (livrable 8) ----------
@@ -780,7 +1011,7 @@ function _pdfCanvasHautChevalet(s, urlApp) {
   const joursTous = Array.from({ length: nbJours }, (_, i) => 'J' + (i + 1));
   const joursAffiches = joursTous.slice(0, 7);
   const zoneX = mm(8), zoneY = mm(20), zoneW = canvas.width - qrTaille - mm(24), zoneH = mm(100);
-  const jourISP = (S.session && S.session.jour_isp) ? 'J' + S.session.jour_isp : null;
+  const joursISP = (typeof joursPresenceISP === 'function') ? joursPresenceISP() : new Set();
 
   if (nbJours > 7) {
     ctx.fillStyle = '#666';
@@ -797,7 +1028,7 @@ function _pdfCanvasHautChevalet(s, urlApp) {
     ctx.font = 'bold ' + mm(3) + 'px Arial';
     ctx.fillStyle = '#c8102e';
     ctx.textAlign = 'center';
-    joursAffiches.forEach((j, i) => ctx.fillText(j + (j === jourISP ? ' 🩺' : ''), zoneX + i * colW + colW / 2, zoneY + mm(3)));
+    joursAffiches.forEach((j, i) => ctx.fillText(j + (joursISP.has(j) ? ' 🩺' : ''), zoneX + i * colW + colW / 2, zoneY + mm(3)));
     ctx.textAlign = 'left';
     ['matin', 'apres_midi'].forEach((demi, ri) => {
       const rowY = zoneY + mm(6) + ri * rowH;
@@ -809,7 +1040,7 @@ function _pdfCanvasHautChevalet(s, urlApp) {
       ctx.fillText(libDemi, zoneX, rowY - mm(1));
       joursAffiches.forEach((j, ci) => {
         const cellX = zoneX + ci * colW, cellY = rowY;
-        if (j === jourISP) {
+        if (joursISP.has(j)) {
           ctx.fillStyle = '#e2f5e5';
           ctx.fillRect(cellX, cellY, colW - mm(1), rowH - mm(2));
         }

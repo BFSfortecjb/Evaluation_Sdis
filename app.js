@@ -58,11 +58,12 @@ function majMenu(actif) {
     (peutCreer ? `<button class="${actif === 'new' ? 'actif' : ''}" onclick="ecranNouvelleSession()">➕ Nouvelle session</button>` : '') +
     `<button class="${actif === 'apt' ? 'actif' : ''}" onclick="ecranGestionFormateurs()">👨‍🏫 Formateurs</button>` +
     (S.vision === 'gfor' ? `<button class="${actif === 'param-form' ? 'actif' : ''}" onclick="ecranParametresFormations()">⚙️ Paramètres formations</button>` : '') +
+    ((S.vision === 'rp' || S.vision === 'gfor' || S.vision === 'chef_centre') ? `<button class="${actif === 'archives' ? 'actif' : ''}" onclick="ecranArchives()">🗂️ Archives entretiens & PV</button>` : '') +
     `<button class="${actif === 'parcours' ? 'actif' : ''}" onclick="ecranMonParcoursStagiaire()">📖 Mon parcours stagiaire</button>`;
   m.style.display = '';
 }
 
-const GRADES = ['SAP', 'CAP', 'CCH', 'SGT', 'SCH', 'ADJ', 'ADC', 'LTN', 'CNE', 'CDT', 'LCL', 'COL', 'ISP'];
+const GRADES = ['SAP', 'CAP', 'CCH', 'SGT', 'SCH', 'ADJ', 'ADC', 'LTN', 'CNE', 'CDT', 'LCL', 'COL'];
 const DOMAINES_COMP = ['INCENDIE', 'PPBE', 'SSUAP', 'SR'];
 const STATUTS = ['SPV', 'SPP', 'PATS'];
 // Liste des CIS du Finistère — à ajuster librement ici si besoin
@@ -83,10 +84,10 @@ function selectCIS(id, valeur) {
 // Une même personne peut cumuler plusieurs niveaux (formateur / RP / for de for)
 // dans un même domaine, chacun avec sa propre date de fin de validité.
 function couleurRole(role) {
-  return role === 'rp' ? '#1565c0' : role === 'for_de_for' ? '#6a1b9a' : '#607d8b';
+  return role === 'rp' ? '#1565c0' : role === 'for_de_for' ? '#6a1b9a' : role === 'isp' ? '#00838f' : '#607d8b';
 }
 function libelleRoleQualif(role) {
-  return role === 'rp' ? 'RP' : role === 'for_de_for' ? 'For de For' : 'Form.';
+  return role === 'rp' ? 'RP' : role === 'for_de_for' ? 'For de For' : role === 'isp' ? 'ISP' : 'Form.';
 }
 
 function badgeQualif(q, suppr) {
@@ -197,7 +198,7 @@ async function ecranGestionFormateurs() {
       <label>Qualifications de la personne</label>
       <div class="ligne">
         <div><label>Domaine</label><select id="ap-q-dom">${DOMAINES_COMP.map(d => `<option>${d}</option>`).join('')}</select></div>
-        <div><label>Rôle</label><select id="ap-q-role"><option value="formateur">Formateur</option><option value="rp">RP</option><option value="for_de_for">For de For</option></select></div>
+        <div><label>Rôle</label><select id="ap-q-role"><option value="formateur">Formateur</option><option value="rp">RP</option><option value="for_de_for">For de For</option><option value="isp">ISP (infirmier sapeur-pompier)</option></select></div>
         <div><label>Fin de validité</label><input id="ap-q-fin" type="date"></div>
         <div style="align-self:flex-end"><button class="btn petit" onclick="ajouterQualifEnCours()">➕ Ajouter</button></div>
       </div>
@@ -208,7 +209,7 @@ async function ecranGestionFormateurs() {
       <div class="ligne">
         <div><label>Personne</label><select id="qx-apt">${(apt || []).map(a => `<option value="${a.id}">${esc(a.nom)} ${esc(a.prenom)}</option>`).join('')}</select></div>
         <div><label>Domaine</label><select id="qx-dom">${DOMAINES_COMP.map(d => `<option>${d}</option>`).join('')}</select></div>
-        <div><label>Rôle</label><select id="qx-role"><option value="formateur">Formateur</option><option value="rp">RP</option><option value="for_de_for">For de For</option></select></div>
+        <div><label>Rôle</label><select id="qx-role"><option value="formateur">Formateur</option><option value="rp">RP</option><option value="for_de_for">For de For</option><option value="isp">ISP (infirmier sapeur-pompier)</option></select></div>
         <div><label>Fin de validité</label><input id="qx-fin" type="date"></div>
         <div style="align-self:flex-end"><button class="btn petit" onclick="ajouterQualifExistant()">➕ Ajouter</button></div>
       </div>
@@ -692,7 +693,6 @@ async function creerSession() {
     responsable,
     seuil_na_jury: (formationChoisie && formationChoisie.seuil_na_jury_defaut) || 2,
     seuil_eca_jury: (formationChoisie && formationChoisie.seuil_eca_jury_defaut) || 4,
-    jour_isp: (formationChoisie && formationChoisie.jour_isp_defaut) || null,
   }).select().single();
   if (error) return toast(error.message, false);
   toast('Session créée — code stagiaire : ' + code);
@@ -703,7 +703,7 @@ async function creerSession() {
 // SESSION — chargement des données + onglets
 // ============================================================
 async function chargerDonneesSession(sessionId) {
-  const [stag, form, pass, equi, evals, autos, bilans, planning] = await Promise.all([
+  const [stag, form, pass, equi, evals, autos, bilans, planning, entretiens] = await Promise.all([
     sb.from('stagiaires').select('*').eq('session_id', sessionId).order('nom'),
     sb.from('session_formateurs').select('*').eq('session_id', sessionId).order('nom'),
     sb.from('passages').select('*').eq('session_id', sessionId).order('numero'),
@@ -712,13 +712,41 @@ async function chargerDonneesSession(sessionId) {
     sb.from('autoevaluations').select('*, passages!inner(session_id)').eq('passages.session_id', sessionId),
     sb.from('bilans_journaliers').select('*').eq('session_id', sessionId),
     sb.from('blocs_planning').select('*').eq('session_id', sessionId).order('ordre'),
+    sb.from('entretiens_individuels').select('*').eq('session_id', sessionId),
   ]);
-  for (const r of [stag, form, pass, equi, evals, autos, bilans, planning]) if (r.error) throw r.error;
+  for (const r of [stag, form, pass, equi, evals, autos, bilans, planning, entretiens]) if (r.error) throw r.error;
   S.data = {
     stagiaires: stag.data, formateurs: form.data, passages: pass.data,
     equipiers: equi.data, evaluations: evals.data, autoevaluations: autos.data,
-    bilansJournaliers: bilans.data, blocsPlanning: planning.data,
+    bilansJournaliers: bilans.data, blocsPlanning: planning.data, entretiens: entretiens.data,
   };
+
+  // Marque directement chaque formateur ISP (qualification role='isp') sur S.data.formateurs, pour
+  // que le chronogramme (planning.js/pdf.js) puisse déterminer le(s) jour(s) de présence ISP sans
+  // dépendre d'un chargement préalable de l'onglet Équipe pédagogique.
+  const aptiIds = (form.data || []).map(f => f.aptitude_id).filter(Boolean);
+  if (aptiIds.length) {
+    const { data: qualis } = await sb.from('qualifications').select('aptitude_id, role').in('aptitude_id', aptiIds).eq('role', 'isp');
+    const idsISP = new Set((qualis || []).map(q => q.aptitude_id));
+    S.data.formateurs.forEach(f => { f._isp = f.aptitude_id ? idsISP.has(f.aptitude_id) : false; });
+  } else {
+    S.data.formateurs.forEach(f => { f._isp = false; });
+  }
+}
+
+// Jour(s) de présence ISP de la session, dérivés de la présence (jour_debut/jour_fin) du ou des
+// formateurs qualifiés ISP inscrits dans l'équipe pédagogique — pas d'un champ séparé, puisque la
+// disponibilité réelle de l'ISP dépend de son planning propre et se règle au même endroit que la
+// présence de n'importe quel formateur (onglet Équipe pédagogique).
+function joursPresenceISP() {
+  const nbJours = (S.formation && S.formation.nb_jours) || 5;
+  const jours = new Set();
+  (S.data.formateurs || []).filter(f => f._isp).forEach(f => {
+    const jd = f.jour_debut || 1;
+    const jf = f.jour_fin || nbJours;
+    for (let d = jd; d <= jf; d++) jours.add('J' + d);
+  });
+  return jours;
 }
 
 async function ouvrirSession(sessionId) {
@@ -762,8 +790,8 @@ async function ouvrirSession(sessionId) {
         ['evaluations', 'Évaluations'], ['msp', 'Suivi MSP'], ['validation', 'Validation'], ['comparatif', 'Comparatif'],
         ['bilanjour', 'Bilan journalier'], ['planning', 'Chronogramme'],
       ];
-  // Réglages du stage : réservés au RP et au GFor
-  if (S.vision === 'rp' || S.vision === 'gfor') onglets.push(['parametres', 'Paramètres']);
+  // Réglages du stage, entretiens individuels et PV de stage : réservés au RP et au GFor
+  if (S.vision === 'rp' || S.vision === 'gfor') { onglets.push(['entretiens', 'Entretiens individuels']); onglets.push(['parametres', 'Paramètres']); }
   $('session-onglets').innerHTML = onglets.map(([id, lbl]) =>
     `<button id="ong-${id}" onclick="ongletSession('${id}')">${lbl}</button>`).join('');
   show('ecran-session');
@@ -772,10 +800,13 @@ async function ouvrirSession(sessionId) {
 
 function ongletSession(id) {
   document.querySelectorAll('#session-onglets button').forEach(b => b.classList.remove('actif'));
-  $('ong-' + id).classList.add('actif');
+  // L'onglet peut être absent du menu (ex : « entretiens » ouvert directement depuis les Archives
+  // par un chef de centre, qui n'a pas ce bouton dans sa barre d'onglets) — sans casser l'affichage.
+  const bouton = $('ong-' + id);
+  if (bouton) bouton.classList.add('actif');
   ({ stagiaires: ongletStagiaires, formateurs: ongletFormateurs, garde: ongletGarde,
      evaluations: ongletEvaluations, msp: ongletSuiviMSP, validation: ongletValidation, comparatif: ongletComparatif,
-     bilanjour: ongletBilanJournalier, planning: ongletPlanning, parametres: ongletParametresStage }[id])();
+     bilanjour: ongletBilanJournalier, planning: ongletPlanning, entretiens: ongletEntretiens, parametres: ongletParametresStage }[id])();
 }
 
 // ---------- Onglet Stagiaires ----------
@@ -1106,6 +1137,74 @@ async function genererLivretHistorique(sessionId, stagiaireId, bouton) {
   }
 }
 
+// ============================================================
+// ARCHIVES — entretiens individuels signés & PV de stage générés, au-delà de la session
+// actuellement ouverte (ex : un RP retrouvant un stagiaire déjà rencontré sur un stage
+// précédent, ou le chef de centre consultant les entretiens des stagiaires de son CIS).
+// Accès en lecture pour RP/GFor/chef de centre ; l'édition reste réservée à l'onglet
+// « Entretiens individuels » / « Paramètres » de la session concernée.
+// ============================================================
+async function ecranArchives() {
+  majMenu('archives');
+  show('ecran-staff-accueil');
+  const filtreCis = S.vision === 'chef_centre' ? (S.user ? S.user.cis : null) : null;
+
+  const [entRes, pvRes] = await Promise.all([
+    sb.from('entretiens_individuels')
+      .select('*, stagiaires(nom, prenom, cis), sessions(lieu, date_debut, date_fin, code_acces, formations(libelle))')
+      .not('signe_le', 'is', null)
+      .order('signe_le', { ascending: false }),
+    sb.from('sessions')
+      .select('*, formations(libelle), stagiaires(cis)')
+      .not('pv_genere_le', 'is', null)
+      .order('pv_genere_le', { ascending: false }),
+  ]);
+  if (entRes.error) return toast(entRes.error.message, false);
+  if (pvRes.error) return toast(pvRes.error.message, false);
+
+  const entretiens = (entRes.data || []).filter(e => !filtreCis || (e.stagiaires && e.stagiaires.cis === filtreCis));
+  const sessionsPV = (pvRes.data || []).filter(s => !filtreCis || (s.stagiaires || []).some(st => st.cis === filtreCis));
+
+  const lignesEnt = entretiens.map(e => `<tr>
+      <td>${esc(e.sessions && e.sessions.formations ? e.sessions.formations.libelle : '')}</td>
+      <td>${esc(e.sessions ? e.sessions.lieu || '' : '')}</td>
+      <td>${esc(e.stagiaires ? e.stagiaires.prenom + ' ' + e.stagiaires.nom : '')}</td>
+      <td>${e.type === 'mi_parcours' ? 'Mi-parcours' : 'Fin de stage'}</td>
+      <td>${e.decision !== 'normal' ? (e.decision === 'ajournement' ? '⚠️ Ajournement' : '🔁 Résolution') : '—'}</td>
+      <td>${esc((e.signe_le || '').slice(0, 10))}</td>
+      <td><button class="btn petit secondaire" onclick="_ouvrirArchiveEntretien('${e.session_id}', ${e.stagiaire_id}, '${e.type}')">Ouvrir</button></td>
+    </tr>`).join('');
+
+  const lignesPV = sessionsPV.map(s => `<tr>
+      <td>${esc(s.formations ? s.formations.libelle : '')}</td>
+      <td>${esc(s.lieu || '')}</td>
+      <td>${esc(s.date_debut || '')} → ${esc(s.date_fin || '')}</td>
+      <td>${esc((s.pv_genere_le || '').slice(0, 10))}</td>
+      <td><button class="btn petit secondaire" onclick="ouvrirSession('${s.id}')">Ouvrir la session</button></td>
+    </tr>`).join('');
+
+  $('staff-dashboard').innerHTML = `<div class="carte">
+    <h2>Archives — entretiens individuels & PV de stage</h2>
+    <div class="info">Consultation des entretiens signés et des PV de stage générés, au-delà de la session actuellement ouverte.${filtreCis ? ' Filtré sur ' + esc(filtreCis) + '.' : ''}</div>
+    <h3>Entretiens individuels signés</h3>
+    <div class="table-scroll"><table>
+      <tr><th>Formation</th><th>Lieu</th><th>Stagiaire</th><th>Type</th><th>Décision</th><th>Signé le</th><th></th></tr>
+      ${lignesEnt || '<tr><td colspan="7"><span class="info">Aucun entretien signé pour l\'instant.</span></td></tr>'}
+    </table></div>
+    <h3 style="margin-top:20px">PV de stage générés</h3>
+    <div class="table-scroll"><table>
+      <tr><th>Formation</th><th>Lieu</th><th>Dates</th><th>Généré le</th><th></th></tr>
+      ${lignesPV || '<tr><td colspan="5"><span class="info">Aucun PV généré pour l\'instant.</span></td></tr>'}
+    </table></div>
+  </div>`;
+}
+
+async function _ouvrirArchiveEntretien(sessionId, stagiaireId, type) {
+  await ouvrirSession(sessionId);
+  ongletSession('entretiens');
+  formEntretien(stagiaireId, type);
+}
+
 // ---------- Mon parcours (stagiaire) — accessible à toute personne de la liste d'aptitude,
 // que ce soit son espace principal (compte « stagiaire » pur) ou un complément à son espace
 // formateur/RP/GFor habituel (ex : formateur CCH devenu stagiaire sur une session CA1E1E).
@@ -1163,48 +1262,65 @@ async function ongletFormateurs() {
   const dispo = (apt || [])
     .map(a => {
       // Une personne peut avoir plusieurs qualifications dans le même domaine (formateur/RP/for de for) :
-      // on privilégie une qualification encore valide.
-      const quals = (a.qualifications || []).filter(q => !domComp || q.domaine === domComp);
-      const q = quals.find(q => q.fin_validite >= auj) || quals[0];
+      // on privilégie une qualification encore valide. L'ISP est une qualification à part (rôle « isp »),
+      // pas liée au domaine de la formation — on la propose toujours, même hors domaine.
+      const isp = (a.qualifications || []).find(q => q.role === 'isp' && q.fin_validite >= auj);
+      const quals = (a.qualifications || []).filter(q => q.role !== 'isp' && (!domComp || q.domaine === domComp));
+      const q = quals.find(q => q.fin_validite >= auj) || isp || quals[0];
       return { a, q };
     })
     .filter(x => x.q && !dejaIds.includes(x.a.id) && !dejaNoms.includes(x.a.prenom + ' ' + x.a.nom));
 
   const nbJours = (S.formation && S.formation.nb_jours) || 5;
+  const gererJury = S.vision === 'rp' || S.vision === 'gfor';
   const equipe = S.data.formateurs.map(f => {
     const a = f.aptitude_id ? (apt || []).find(x => x.id === f.aptitude_id) : null;
-    const isISP = a && a.grade === 'ISP';
-    const qualDom = a ? (a.qualifications || []).find(q => !domComp || q.domaine === domComp) : null;
-    const badgeGrade = a
-      ? (isISP
-        ? `<span class="badge" style="background:#00838f;color:#fff">🩺 ISP</span>`
-        : a.grade ? `<span class="badge">${esc(a.grade)}</span>` : '')
-      : '';
+    const qualISP = a ? (a.qualifications || []).find(q => q.role === 'isp') : null;
+    const isISP = !!qualISP;
+    const qualDom = a ? (a.qualifications || []).find(q => q.role !== 'isp' && (!domComp || q.domaine === domComp)) : null;
+    const badgeGrade = a && a.grade ? `<span class="badge">${esc(a.grade)}</span>` : '';
+    const badgeISP = isISP ? `<span class="badge" style="background:#00838f;color:#fff">🩺 ISP</span>` : '';
     const badgeRole = qualDom
       ? `<span class="badge" style="background:${couleurRole(qualDom.role)};color:#fff">${libelleRoleQualif(qualDom.role)} ${esc(qualDom.domaine)}</span>`
       : (isISP ? `<span class="badge" style="background:#999;color:#fff">Présence médicale (non formateur)</span>` : '');
     const presence = (f.jour_debut || f.jour_fin)
       ? `J${f.jour_debut || 1} → J${f.jour_fin || nbJours}`
       : 'Toute la session';
+    const jurySection = gererJury ? `
+      <div style="margin-top:6px">
+        <label><input type="checkbox" ${f.membre_jury ? 'checked' : ''} onchange="toggleMembreJury(${f.id}, this.checked)" style="width:auto"> Membre du jury (doit signer le PV de stage)</label>
+        ${f.membre_jury ? (f.signe_jury_le
+          ? `<span class="entretien-statut fait" style="margin-left:8px">✅ A signé le ${esc(f.signe_jury_le.slice(0, 10))}</span>`
+          : `<button class="btn petit secondaire" style="margin-left:8px" onclick="formSignatureJury(${f.id})">✍️ Signature jury</button>`) : ''}
+        <div id="jury-form-${f.id}"></div>
+      </div>` : '';
     return `<div class="bloc-comp">
-      <b>${esc(f.nom)}</b> ${badgeGrade} ${badgeRole}
+      <b>${esc(f.nom)}</b> ${badgeGrade} ${badgeISP} ${badgeRole}
       <span class="info" style="margin-left:8px">📅 ${esc(presence)}</span>
       <button class="btn petit secondaire" style="float:right;margin-left:4px" onclick="supprFormateur(${f.id})">✕</button>
       <button class="btn petit secondaire" style="float:right" onclick="formPresenceFormateur(${f.id})">📅 Présence</button>
       <div id="presence-form-${f.id}"></div>
+      ${jurySection}
     </div>`;
   }).join('');
+
+  const isp29 = S.formation && S.formation.necessite_isp;
+  const aUnISP = S.data.formateurs.some(f => {
+    const a = f.aptitude_id ? (apt || []).find(x => x.id === f.aptitude_id) : null;
+    return a && (a.qualifications || []).some(q => q.role === 'isp');
+  });
 
   $('session-contenu').innerHTML = `
     <div class="carte">
       <h2>Équipe pédagogique (${S.data.formateurs.length})</h2>
-      <div class="info">🩺 ISP = infirmier sapeur-pompier — certains sont aussi qualifiés formateur/for de for (badge coloré), d'autres n'interviennent que pour l'encadrement médical (« Présence médicale »). 📅 Présence = jours où la personne est effectivement là (utile quand plusieurs formateurs se succèdent sur la semaine).</div>
+      <div class="info">🩺 ISP = infirmier sapeur-pompier — qualification à part entière (comme formateur/RP/for de for), certains sont aussi qualifiés formateur/for de for (badge coloré), d'autres n'interviennent que pour l'encadrement médical (« Présence médicale »). 📅 Présence = jours où la personne est effectivement là (utile quand plusieurs formateurs se succèdent sur la semaine) — c'est aussi cette présence qui détermine le jour ISP mis en évidence dans le chronogramme.</div>
+      ${isp29 ? `<div class="info" style="${aUnISP ? '' : 'color:#c8102e;font-weight:bold'}">${aUnISP ? '✅ Un ISP est inscrit dans l\'équipe pédagogique.' : '⚠️ Cette formation nécessite l\'intervention d\'un ISP — aucun ISP inscrit pour l\'instant.'}</div>` : ''}
       ${equipe}
       <h3>Inscrire un formateur (liste d'aptitude${domComp ? ' — domaine ' + esc(domComp) : ''})</h3>
       ${dispo.length ? `
         <select id="fo-apt">${dispo.map(x =>
           `<option value="${x.a.id}" data-fin="${x.q.fin_validite}" data-nom="${esc(x.a.prenom + ' ' + x.a.nom)}">
-            ${esc(x.a.grade || '')} ${esc(x.a.prenom)} ${esc(x.a.nom)} (${esc(x.a.cis || '')}) — ${x.a.grade === 'ISP' ? 'ISP' : libelleRoleQualif(x.q.role)} ${esc(x.q.domaine)}, valide jusqu'au ${x.q.fin_validite}</option>`).join('')}</select>
+            ${esc(x.a.grade || '')} ${esc(x.a.prenom)} ${esc(x.a.nom)} (${esc(x.a.cis || '')}) — ${libelleRoleQualif(x.q.role)}${x.q.domaine ? ' ' + esc(x.q.domaine) : ''}, valide jusqu'au ${x.q.fin_validite}</option>`).join('')}</select>
         <div class="ligne">
           <div><label>Présent du jour … (facultatif, par défaut toute la session)</label><input id="fo-jd" type="number" min="1" max="${nbJours}"></div>
           <div><label>… au jour …</label><input id="fo-jf" type="number" min="1" max="${nbJours}"></div>
@@ -1255,6 +1371,38 @@ async function enregistrerPresenceFormateur(id) {
   const { error } = await sb.from('session_formateurs').update({ jour_debut: jd, jour_fin: jf }).eq('id', id);
   if (error) return toast(error.message, false);
   await chargerDonneesSession(S.session.id); ongletFormateurs(); toast('Présence mise à jour');
+}
+
+// Jury de stage : parmi l'équipe pédagogique, ceux qui siègent au jury signent le PV de stage
+// (livrable 9) une fois tous les entretiens individuels signés (voir genererPVStage, pdf.js).
+async function toggleMembreJury(id, checked) {
+  const payload = { membre_jury: checked };
+  if (!checked) { payload.signature_jury = null; payload.signe_jury_le = null; }
+  const { error } = await sb.from('session_formateurs').update(payload).eq('id', id);
+  if (error) return toast(error.message, false);
+  await chargerDonneesSession(S.session.id); ongletFormateurs();
+}
+
+function formSignatureJury(id) {
+  const f = S.data.formateurs.find(x => x.id === id);
+  if (!f) return;
+  $('jury-form-' + id).innerHTML = `
+    <div style="margin-top:6px">
+      <label>Signature de ${esc(f.nom)} (jury)</label>
+      ${_zoneSignature('jury-sig-' + id, f.signature_jury, false)}
+      <button class="btn petit" onclick="enregistrerSignatureJury(${id})">Enregistrer la signature</button>
+    </div>`;
+  _initSignatures(['jury-sig-' + id]);
+}
+
+async function enregistrerSignatureJury(id) {
+  const sig = _lireSignature('jury-sig-' + id);
+  if (!sig) return toast('Signature vide', false);
+  const { error } = await sb.from('session_formateurs').update({ signature_jury: sig, signe_jury_le: new Date().toISOString() }).eq('id', id);
+  if (error) return toast(error.message, false);
+  await chargerDonneesSession(S.session.id);
+  toast('Signature du jury enregistrée');
+  ongletFormateurs();
 }
 
 // ---------- Onglet Feuille de garde ----------
@@ -1841,11 +1989,114 @@ function ongletParametresStage() {
       <input id="pr-nb-msp" type="number" min="1" placeholder="Laisser vide = toutes les MSP" value="${sess.nb_msp_certification ?? ''}">
       <div class="info">Si renseigné (ex. 5) : pour chaque stagiaire, seules ses N dernières MSP évaluées (les plus récentes, par numéro de passage) comptent pour la validation des compétences — même si le stagiaire en a fait davantage.</div>
       ${S.formation && S.formation.necessite_isp ? `
-      <label>Jour de présence ISP (jour relatif, ex : 1 = J1)</label>
-      <input id="pr-jour-isp" type="number" min="1" value="${sess.jour_isp ?? ''}">
-      <div class="info">Ce jour sera mis en évidence en fond vert dans le chronogramme. Cette formation nécessite l'intervention d'un ISP.</div>` : ''}
+      <label>Présence ISP</label>
+      <div class="info">Cette formation nécessite l'intervention d'un ISP. Le jour de présence réel dépend de sa disponibilité : il se règle dans l'onglet « Formateurs » (inscrire la personne qualifiée ISP puis préciser ses jours de présence), pas ici. ${(typeof joursPresenceISP === 'function' && joursPresenceISP().size) ? '✅ ISP présent le ' + Array.from(joursPresenceISP()).join(', ') + '.' : '⚠️ Aucun ISP inscrit pour l\'instant dans l\'équipe pédagogique.'}</div>` : ''}
       <button class="btn" onclick="enregistrerParametresStage()">Enregistrer</button>
+    </div>` + _carteEtatPVStage();
+  if (!(sess.pv_genere_le)) _initSignatures(['pv-gfor-sig']);
+}
+
+// ---------- PV de stage (livrable 9, modèle SDIS29) ----------
+function _etatEntretiens() {
+  const total = S.data.stagiaires.length;
+  let miOk = 0, finOk = 0;
+  S.data.stagiaires.forEach(s => {
+    if (_entretien(s.id, 'mi_parcours') && _entretien(s.id, 'mi_parcours').signe_le) miOk++;
+    if (_entretien(s.id, 'fin_stage') && _entretien(s.id, 'fin_stage').signe_le) finOk++;
+  });
+  return { total, miOk, finOk, complet: total > 0 && miOk === total && finOk === total };
+}
+function _etatJury() {
+  const membres = S.data.formateurs.filter(f => f.membre_jury);
+  const signes = membres.filter(f => f.signe_jury_le);
+  return { total: membres.length, signes: signes.length, complet: membres.length > 0 && signes.length === membres.length };
+}
+
+function _carteEtatPVStage() {
+  const sess = S.session;
+  const etatEnt = _etatEntretiens();
+  const etatJury = _etatJury();
+  const peutGenerer = etatEnt.complet && etatJury.complet;
+  const verrouilleSignatureGfor = !!sess.pv_genere_le;
+  return `
+    <div class="carte">
+      <h2>PV de stage</h2>
+      <div class="info">Le PV de stage (modèle SDIS29) ne peut être généré que lorsque tous les entretiens individuels sont signés et que tous les membres du jury (onglet Formateurs) ont signé.</div>
+      <p>Entretiens mi-parcours signés : <b>${etatEnt.miOk}/${etatEnt.total}</b><br>
+         Entretiens fin de stage signés : <b>${etatEnt.finOk}/${etatEnt.total}</b><br>
+         Signatures du jury : <b>${etatJury.signes}/${etatJury.total}</b></p>
+
+      <label>Nombre total d'heures de formation réalisées</label>
+      <input id="pv-heures" type="number" min="0" step="0.5" value="${sess.nb_heures_formation ?? ''}">
+      <label>Référence d'enregistrement (GFor)</label>
+      <input id="pv-ref" value="${esc(sess.ref_enregistrement || '')}" placeholder="ex : FCPAE FPSE-SDIS29-N°20-XX">
+      <label>Nom du GFor signataire</label>
+      <input id="pv-gfor-nom" value="${esc(sess.gfor_signataire || '')}">
+      <label>Signature du GFor</label>
+      ${_zoneSignature('pv-gfor-sig', sess.gfor_signature, verrouilleSignatureGfor)}
+
+      <h3>Identité des candidats (nécessaire pour le PV)</h3>
+      <div class="table-scroll"><table>
+        <tr><th>Civilité</th><th>Nom Prénom</th><th>Date naissance</th><th>Lieu naissance</th><th>Dpt</th><th>Observations</th></tr>
+        ${S.data.stagiaires.map(s => `<tr>
+          <td><select id="pv-civ-${s.id}"><option value="">—</option><option value="M" ${s.civilite === 'M' ? 'selected' : ''}>M</option><option value="Mme" ${s.civilite === 'Mme' ? 'selected' : ''}>Mme</option></select></td>
+          <td>${esc(s.nom)} ${esc(s.prenom)}</td>
+          <td><input id="pv-dn-${s.id}" type="date" value="${s.date_naissance || ''}"></td>
+          <td><input id="pv-ln-${s.id}" value="${esc(s.lieu_naissance || '')}"></td>
+          <td><input id="pv-dep-${s.id}" style="width:50px" value="${esc(s.departement_naissance || '')}"></td>
+          <td><input id="pv-obs-${s.id}" value="${esc(s.observations_pv || '')}" placeholder="absence, rattrapage..."></td>
+        </tr>`).join('')}
+      </table></div>
+      <button class="btn secondaire" onclick="enregistrerIdentitesPV()">💾 Enregistrer les identités</button>
+
+      ${sess.pv_genere_le
+        ? `<div class="info" style="margin-top:10px">PV de stage généré le ${esc(sess.pv_genere_le.slice(0, 10))}.</div>
+           <button class="btn" onclick="genererPVStage()">📄 Régénérer le PDF du PV</button>`
+        : `<div style="margin-top:10px">
+             <button class="btn" ${peutGenerer ? '' : 'disabled'} onclick="enregistrerInfosPV(true)">📄 Enregistrer et générer le PV de stage</button>
+             ${!peutGenerer ? '<div class="info" style="color:#c8102e">Il manque des entretiens ou des signatures du jury pour pouvoir générer le PV.</div>' : ''}
+           </div>`}
     </div>`;
+}
+
+async function enregistrerIdentitesPV() {
+  for (const s of S.data.stagiaires) {
+    const payload = {
+      civilite: $('pv-civ-' + s.id).value || null,
+      date_naissance: $('pv-dn-' + s.id).value || null,
+      lieu_naissance: $('pv-ln-' + s.id).value.trim() || null,
+      departement_naissance: $('pv-dep-' + s.id).value.trim() || null,
+      observations_pv: $('pv-obs-' + s.id).value.trim() || null,
+    };
+    const { error } = await sb.from('stagiaires').update(payload).eq('id', s.id);
+    if (error) return toast(error.message, false);
+    Object.assign(s, payload);
+  }
+  toast('Identités enregistrées');
+}
+
+async function enregistrerInfosPV(generer) {
+  const payload = {
+    nb_heures_formation: Number($('pv-heures').value) || null,
+    ref_enregistrement: $('pv-ref').value.trim() || null,
+    gfor_signataire: $('pv-gfor-nom').value.trim() || null,
+  };
+  const sig = _lireSignature('pv-gfor-sig');
+  if (sig) payload.gfor_signature = sig;
+  if (generer) {
+    if (!payload.gfor_signataire || !(sig || S.session.gfor_signature)) return toast('Nom et signature du GFor requis pour générer le PV', false);
+    payload.pv_genere_le = new Date().toISOString();
+  }
+  const { error } = await sb.from('sessions').update(payload).eq('id', S.session.id);
+  if (error) return toast(error.message, false);
+  Object.assign(S.session, payload);
+  ongletParametresStage();
+  if (generer) {
+    await genererPVStage();
+    toast('PV de stage généré');
+  } else {
+    toast('Informations enregistrées');
+  }
 }
 
 async function enregistrerParametresStage() {
@@ -1854,14 +2105,190 @@ async function enregistrerParametresStage() {
   const nbMspRaw = $('pr-nb-msp').value.trim();
   const nbMsp = nbMspRaw ? Number(nbMspRaw) : null;
   const payload = { seuil_na_jury: seuilNA, seuil_eca_jury: seuilECA, nb_msp_certification: nbMsp };
-  if ($('pr-jour-isp')) {
-    const jourIspRaw = $('pr-jour-isp').value.trim();
-    payload.jour_isp = jourIspRaw ? Number(jourIspRaw) : null;
-  }
   const { error } = await sb.from('sessions').update(payload).eq('id', S.session.id);
   if (error) return toast(error.message, false);
   Object.assign(S.session, payload);
   toast('Paramètres du stage enregistrés');
+}
+
+// ============================================================
+// SIGNATURE (canvas tactile) — composant réutilisé par les entretiens individuels, le GFor et
+// le jury de stage. Capture un tracé au doigt/souris, restitué en PNG (base64) via _lireSignature().
+// Rien n'est envoyé/stocké tant que le formulaire appelant ne lit pas explicitement le canvas.
+// ============================================================
+function _zoneSignature(zoneId, valeurExistante, lectureSeule) {
+  if (lectureSeule) {
+    return valeurExistante
+      ? `<div class="zone-signature"><img src="${valeurExistante}" alt="signature" style="max-height:70px;border:1px solid #ddd;border-radius:4px;background:#fff"></div>`
+      : `<div class="info">Non signé</div>`;
+  }
+  return `<div class="zone-signature">
+    <canvas id="${zoneId}-canvas" width="300" height="100" style="border:1px solid #ccc;border-radius:4px;touch-action:none;background:#fff;max-width:100%"></canvas>
+    <div><button type="button" class="btn petit secondaire" onclick="_effacerSignature('${zoneId}')">Effacer</button></div>
+  </div>`;
+}
+
+// À appeler juste après avoir injecté le HTML contenant les zones de signature (les <canvas>
+// doivent déjà être dans le DOM). Idempotent (protégé par canvas._sigInit).
+function _initSignatures(zoneIds) {
+  (zoneIds || []).forEach(zoneId => {
+    const canvas = $(zoneId + '-canvas');
+    if (!canvas || canvas._sigInit) return;
+    canvas._sigInit = true;
+    const ctx = canvas.getContext('2d');
+    ctx.strokeStyle = '#1a1a2e';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    let dessine = false;
+    const pos = e => {
+      const r = canvas.getBoundingClientRect();
+      const p = e.touches ? e.touches[0] : e;
+      return { x: (p.clientX - r.left) * (canvas.width / r.width), y: (p.clientY - r.top) * (canvas.height / r.height) };
+    };
+    const debut = e => { dessine = true; const p = pos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); e.preventDefault(); };
+    const trace = e => { if (!dessine) return; const p = pos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); e.preventDefault(); };
+    const fin = () => { dessine = false; };
+    canvas.addEventListener('mousedown', debut);
+    canvas.addEventListener('mousemove', trace);
+    canvas.addEventListener('mouseup', fin);
+    canvas.addEventListener('mouseleave', fin);
+    canvas.addEventListener('touchstart', debut, { passive: false });
+    canvas.addEventListener('touchmove', trace, { passive: false });
+    canvas.addEventListener('touchend', fin);
+  });
+}
+
+function _effacerSignature(zoneId) {
+  const canvas = $(zoneId + '-canvas');
+  if (canvas) canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function _signatureEstVide(canvas) {
+  const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+  for (let i = 3; i < data.length; i += 4) if (data[i] !== 0) return false;
+  return true;
+}
+
+// Renvoie le dataURL PNG de la signature tracée, ou null si le canvas est vide (rien signé).
+function _lireSignature(zoneId) {
+  const canvas = $(zoneId + '-canvas');
+  if (!canvas) return null;
+  if (_signatureEstVide(canvas)) return null;
+  return canvas.toDataURL('image/png');
+}
+
+// ============================================================
+// ENTRETIENS INDIVIDUELS (mi-parcours / fin de stage) — réservé RP/GFor
+// Chaque stagiaire a au plus un entretien de chaque type par session. Signature (canvas) du
+// stagiaire puis du RP avant verrouillage définitif : l'entretien devient alors consultable en
+// lecture seule (archivé), y compris pour le GFor, un futur RP et le chef de centre.
+// ============================================================
+function _entretien(stagiaireId, type) {
+  return (S.data.entretiens || []).find(e => e.stagiaire_id === stagiaireId && e.type === type) || null;
+}
+
+function ongletEntretiens() {
+  // Le chef de centre peut consulter (lecture seule, voir formEntretien) depuis les Archives
+  // globales, mais n'a pas cet onglet dans le menu de la session — seuls RP/GFor l'ont en direct.
+  if (!(S.vision === 'rp' || S.vision === 'gfor' || S.vision === 'chef_centre')) {
+    $('session-contenu').innerHTML = '<div class="carte"><p class="info">Réservé au responsable pédagogique et au GFor.</p></div>';
+    return;
+  }
+  const lignes = S.data.stagiaires.map(s => {
+    const mi = _entretien(s.id, 'mi_parcours');
+    const fin = _entretien(s.id, 'fin_stage');
+    const statut = e => e && e.signe_le
+      ? `<span class="entretien-statut fait">✅ Signé le ${esc(e.signe_le.slice(0, 10))}</span>`
+      : e ? `<span class="entretien-statut attente">✏️ Brouillon</span>` : `<span class="info">Non fait</span>`;
+    return `<tr>
+      <td><b>${esc(s.prenom)} ${esc(s.nom)}</b></td>
+      <td>${statut(mi)} <button class="btn petit secondaire" onclick="formEntretien(${s.id}, 'mi_parcours')">${mi ? 'Ouvrir' : 'Réaliser'}</button></td>
+      <td>${statut(fin)} <button class="btn petit secondaire" onclick="formEntretien(${s.id}, 'fin_stage')">${fin ? 'Ouvrir' : 'Réaliser'}</button></td>
+    </tr>`;
+  }).join('');
+
+  $('session-contenu').innerHTML = `
+    <div class="carte">
+      <h2>Entretiens individuels</h2>
+      <div class="info">Deux entretiens par stagiaire : à mi-parcours et en fin de stage. Chacun peut donner lieu à un ajournement ou une résolution si nécessaire. Le commentaire de l'entretien de fin de stage est repris dans le Livret de certification du stagiaire. Une fois signé par le stagiaire et le RP, l'entretien est verrouillé et archivé (consultable par le GFor, le RP d'un prochain stage et le chef de centre).</div>
+      <div class="table-scroll"><table>
+        <tr><th>Stagiaire</th><th>Entretien mi-parcours</th><th>Entretien fin de stage</th></tr>
+        ${lignes}
+      </table></div>
+      <div id="entretien-detail" style="margin-top:16px"></div>
+    </div>`;
+}
+
+function formEntretien(stagiaireId, type) {
+  const s = S.data.stagiaires.find(x => x.id === stagiaireId);
+  if (!s) return;
+  const e = _entretien(stagiaireId, type);
+  // Le chef de centre est toujours en lecture seule ici, même si l'entretien n'est pas encore signé.
+  const verrouille = !!(e && e.signe_le) || S.vision === 'chef_centre';
+  const titre = type === 'mi_parcours' ? 'Entretien à mi-parcours' : 'Entretien de fin de stage';
+
+  $('entretien-detail').innerHTML = `
+    <div class="carte entretien-carte" style="background:#f7f7f9">
+      <h3>${titre} — ${esc(s.prenom)} ${esc(s.nom)}</h3>
+      <label>Date de l'entretien</label>
+      <input id="en-date" type="date" ${verrouille ? 'disabled' : ''} value="${e && e.date_entretien ? e.date_entretien : new Date().toISOString().slice(0, 10)}">
+      <label>Commentaire ${type === 'fin_stage' ? '(repris dans le Livret de certification du stagiaire)' : ''}</label>
+      <textarea id="en-commentaire" ${verrouille ? 'disabled' : ''}>${e && e.commentaire ? esc(e.commentaire) : ''}</textarea>
+      <label>Décision</label>
+      <select id="en-decision" ${verrouille ? 'disabled' : ''} onchange="$('en-decision-detail-ligne').style.display = this.value === 'normal' ? 'none' : ''">
+        <option value="normal" ${(!e || e.decision === 'normal') ? 'selected' : ''}>Normale (pas de suite particulière)</option>
+        <option value="ajournement" ${e && e.decision === 'ajournement' ? 'selected' : ''}>Ajournement</option>
+        <option value="resolution" ${e && e.decision === 'resolution' ? 'selected' : ''}>Résolution</option>
+      </select>
+      <div class="ligne" id="en-decision-detail-ligne" style="display:${e && e.decision && e.decision !== 'normal' ? '' : 'none'}">
+        <div style="flex:1"><label>Motifs / mesures (ajournement ou résolution)</label>
+        <textarea id="en-decision-detail" ${verrouille ? 'disabled' : ''}>${e && e.decision_detail ? esc(e.decision_detail) : ''}</textarea></div>
+      </div>
+
+      <label>Signature du stagiaire</label>
+      ${_zoneSignature('en-sig-stag', e ? e.signature_stagiaire : null, verrouille)}
+      <label>Signature du RP</label>
+      ${_zoneSignature('en-sig-rp', e ? e.signature_rp : null, verrouille)}
+
+      ${!e
+        ? `<div class="info">Cet entretien n'a pas encore été réalisé.</div>`
+        : verrouille
+        ? `<div class="info">${e.signe_le ? 'Entretien signé le ' + esc(e.signe_le.slice(0, 10)) + ' par ' + esc(e.rp_nom || '') + '.' : 'Entretien non signé (brouillon), consultation seule.'}</div>
+           ${e.signe_le ? `<button class="btn secondaire" onclick="genererPDFEntretien(${stagiaireId}, '${type}')">📄 Voir le PDF</button>
+           ${e.decision !== 'normal' ? `<button class="btn secondaire" onclick="genererPDFDecisionEntretien(${stagiaireId}, '${type}')">📄 ${e.decision === 'ajournement' ? "Fiche d'ajournement" : 'Fiche de résolution'}</button>` : ''}` : ''}`
+        : `<button class="btn secondaire" onclick="enregistrerEntretien(${stagiaireId}, '${type}', false)">💾 Enregistrer (brouillon)</button>
+           <button class="btn" onclick="enregistrerEntretien(${stagiaireId}, '${type}', true)">✍️ Signer et verrouiller définitivement</button>`}
+      <button class="btn secondaire" onclick="$('entretien-detail').innerHTML=''">Fermer</button>
+    </div>`;
+  if (!verrouille) _initSignatures(['en-sig-stag', 'en-sig-rp']);
+}
+
+async function enregistrerEntretien(stagiaireId, type, signer) {
+  const decision = $('en-decision').value;
+  const payload = {
+    session_id: S.session.id,
+    stagiaire_id: stagiaireId,
+    type,
+    date_entretien: $('en-date').value || null,
+    commentaire: $('en-commentaire').value.trim() || null,
+    decision,
+    decision_detail: decision !== 'normal' ? ($('en-decision-detail').value.trim() || null) : null,
+  };
+  if (signer) {
+    const sigStag = _lireSignature('en-sig-stag');
+    const sigRP = _lireSignature('en-sig-rp');
+    if (!sigStag || !sigRP) return toast("Les deux signatures (stagiaire et RP) sont requises pour verrouiller l'entretien", false);
+    payload.signature_stagiaire = sigStag;
+    payload.signature_rp = sigRP;
+    payload.signe_le = new Date().toISOString();
+    payload.rp_nom = S.user ? S.user.nom : (S.session.responsable || null);
+  }
+  const { error } = await sb.from('entretiens_individuels').upsert(payload, { onConflict: 'session_id,stagiaire_id,type' });
+  if (error) return toast(error.message, false);
+  await chargerDonneesSession(S.session.id);
+  toast(signer ? 'Entretien signé et verrouillé' : 'Entretien enregistré');
+  ongletEntretiens();
+  formEntretien(stagiaireId, type);
 }
 
 function ongletValidation() {
@@ -2453,11 +2880,8 @@ function ecranFormulaireFormation(id) {
     </div>
 
     <h3>Intervention ISP (infirmier sapeur-pompier)</h3>
-    <label><input type="checkbox" id="fm-necessite-isp" style="width:auto" ${f?.necessite_isp ? 'checked' : ''} onchange="$('fm-jour-isp-ligne').style.display = this.checked ? '' : 'none'"> Cette formation nécessite l'intervention d'un ISP</label>
-    <div class="ligne" id="fm-jour-isp-ligne" style="display:${f?.necessite_isp ? '' : 'none'}">
-      <div><label>Jour de présence ISP par défaut (ex : 1 = J1)</label><input id="fm-jour-isp" type="number" min="1" value="${f?.jour_isp_defaut ?? ''}">
-        <div class="info">Jour relatif repris à la création de chaque session (réglable ensuite dans les Paramètres de la session). Ce jour sera mis en évidence en vert dans le chronogramme.</div></div>
-    </div>
+    <label><input type="checkbox" id="fm-necessite-isp" style="width:auto" ${f?.necessite_isp ? 'checked' : ''}> Cette formation nécessite l'intervention d'un ISP</label>
+    <div class="info">Le jour de présence réel de l'ISP dépend de sa disponibilité : il se règle session par session, directement dans l'onglet « Formateurs » de la session (inscrire la personne qualifiée ISP puis préciser ses jours de présence) — pas ici. Ce jour est alors mis en évidence en vert dans le chronogramme.</div>
 
     <h3>Barème d'encadrement (RIOFE) — RP/formateurs vis-à-vis du nombre de stagiaires</h3>
     <div id="fm-bareme-liste" style="margin-bottom:8px"></div>
@@ -2493,7 +2917,6 @@ async function enregistrerFormation(id) {
     utilise_types_msp: $('fm-types-msp').checked,
     mode_validation: $('fm-types-msp').checked ? $('fm-mode-validation').value : 'standard',
     necessite_isp: $('fm-necessite-isp').checked,
-    jour_isp_defaut: $('fm-necessite-isp').checked && $('fm-jour-isp').value ? Number($('fm-jour-isp').value) : null,
   };
   const req = id ? sb.from('formations').update(payload).eq('id', id) : sb.from('formations').insert(payload);
   const { error } = await req;
