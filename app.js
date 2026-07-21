@@ -692,6 +692,7 @@ async function creerSession() {
     responsable,
     seuil_na_jury: (formationChoisie && formationChoisie.seuil_na_jury_defaut) || 2,
     seuil_eca_jury: (formationChoisie && formationChoisie.seuil_eca_jury_defaut) || 4,
+    jour_isp: (formationChoisie && formationChoisie.jour_isp_defaut) || null,
   }).select().single();
   if (error) return toast(error.message, false);
   toast('Session créée — code stagiaire : ' + code);
@@ -744,8 +745,18 @@ async function ouvrirSession(sessionId) {
 
   // Chef de centre : accès restreint au seul suivi MSP (filtré sur les stagiaires de son CIS),
   // pas de gestion des stagiaires/formateurs/évaluations des autres centres.
+  // Formateur (simple, sans casquette RP) : pas d'accès à la Feuille de garde (organisation des
+  // MSP) ni à l'onglet Validation (décision de certification) — ce sont des attributions RP/GFor.
+  // Les onglets Stagiaires et Chronogramme restent visibles mais allégés (voir ongletStagiaires
+  // et _rendreOngletPlanning : simple consultation, pas de gestion).
   const onglets = S.vision === 'chef_centre'
     ? [['msp', 'Suivi MSP']]
+    : S.vision === 'formateur'
+    ? [
+        ['stagiaires', 'Stagiaires'], ['formateurs', 'Formateurs'],
+        ['evaluations', 'Évaluations'], ['msp', 'Suivi MSP'], ['comparatif', 'Comparatif'],
+        ['bilanjour', 'Bilan journalier'], ['planning', 'Chronogramme'],
+      ]
     : [
         ['stagiaires', 'Stagiaires'], ['formateurs', 'Formateurs'], ['garde', 'Feuille de garde'],
         ['evaluations', 'Évaluations'], ['msp', 'Suivi MSP'], ['validation', 'Validation'], ['comparatif', 'Comparatif'],
@@ -768,29 +779,35 @@ function ongletSession(id) {
 }
 
 // ---------- Onglet Stagiaires ----------
+// Vision formateur (simple, sans casquette RP) : accès allégé, juste la liste (photo, nom,
+// prénom, matricule, CIS) + la prise de photo, sans les actions de gestion (compte personnel,
+// historique, suppression, ajout/import) qui restent réservées au RP/GFor.
 function ongletStagiaires() {
+  const allege = S.vision === 'formateur';
   const lignes = S.data.stagiaires.map(s => `
     <tr>
       <td>${s.photo_url ? `<img src="${esc(s.photo_url)}" alt="" style="width:32px;height:32px;border-radius:50%;object-fit:cover;vertical-align:middle">` : `<span class="avatar-stag" style="width:32px;height:32px;font-size:11px">${esc(initiales(s))}</span>`}</td>
       <td>${esc(s.nom)}</td><td>${esc(s.prenom)}</td><td>${esc(s.matricule || '')}</td><td>${esc(s.cis || '')}</td>
-      <td>${s.aptitude_id
+      ${allege ? '' : `<td>${s.aptitude_id
         ? '<span class="statut-valide" title="Identité stable liée (photo/historique partagés entre stages) — ne veut pas forcément dire qu\'un compte de connexion (email + mot de passe) a été créé. Voir 🔑 pour ça.">🪪 identité liée</span>'
-        : '<span class="info">—</span>'}</td>
+        : '<span class="info">—</span>'}</td>`}
       <td style="white-space:nowrap">
         <label class="btn petit secondaire" style="cursor:pointer">📷<input type="file" accept="image/*" style="display:none" onchange="uploaderPhotoStagiaire(${s.id}, this)"></label>
+        ${allege ? '' : `
         <button class="btn petit secondaire" title="Compte personnel" onclick="ecranCompteStagiaire(${s.id})">🔑</button>
         ${s.aptitude_id ? `<button class="btn petit secondaire" title="Historique multi-stages" onclick="voirHistoriqueStagiaire(${s.aptitude_id})">🕘</button>` : ''}
-        <button class="btn petit secondaire" onclick="supprStagiaire(${s.id})">✕</button>
+        <button class="btn petit secondaire" onclick="supprStagiaire(${s.id})">✕</button>`}
       </td>
     </tr>`).join('');
   $('session-contenu').innerHTML = `
     <div class="carte">
       <h2>Stagiaires (${S.data.stagiaires.length})</h2>
-      <div class="info">📷 = photo (grille d'évaluation par équipe) · 🔑 = créer/lier le compte personnel du stagiaire (suivi de son parcours sur plusieurs stages) · 🕘 = voir son historique d'autres stages, une fois le compte lié.</div>
-      <button class="btn secondaire" onclick="genererChevalets()">🎪 Générer les chevalets (toute la session)</button>
+      <div class="info">${allege ? '📷 = ajouter/mettre à jour la photo du stagiaire.' : '📷 = photo (grille d\'évaluation par équipe) · 🔑 = créer/lier le compte personnel du stagiaire (suivi de son parcours sur plusieurs stages) · 🕘 = voir son historique d\'autres stages, une fois le compte lié.'}</div>
+      ${allege ? '' : '<button class="btn secondaire" onclick="genererChevalets()">🎪 Générer les chevalets (toute la session)</button>'}
       <div class="table-scroll"><table>
-        <tr><th>Photo</th><th>Nom</th><th>Prénom</th><th>Matricule</th><th>CIS</th><th>Compte</th><th></th></tr>${lignes}
+        <tr><th>Photo</th><th>Nom</th><th>Prénom</th><th>Matricule</th><th>CIS</th>${allege ? '' : '<th>Compte</th>'}<th></th></tr>${lignes}
       </table></div>
+      ${allege ? '' : `
       <h3>Ajouter un stagiaire</h3>
       <div class="ligne">
         <div><label>Nom</label><input id="st-nom"></div>
@@ -806,7 +823,7 @@ function ongletStagiaires() {
       <p class="info">Colonnes attendues : Nom, Prénom, Matricule, CIS.</p>
       <button class="btn secondaire" onclick="telechargerModeleStagiaires()">📄 Télécharger le modèle</button>
       <label style="margin-top:10px">Fichier à importer (.xlsx)</label>
-      <input type="file" accept=".xlsx,.xls,.csv" onchange="importerStagiaires(this)">
+      <input type="file" accept=".xlsx,.xls,.csv" onchange="importerStagiaires(this)">`}
     </div>`;
 }
 
@@ -1823,6 +1840,10 @@ function ongletParametresStage() {
       <label>Nombre de MSP prises en compte pour la certification</label>
       <input id="pr-nb-msp" type="number" min="1" placeholder="Laisser vide = toutes les MSP" value="${sess.nb_msp_certification ?? ''}">
       <div class="info">Si renseigné (ex. 5) : pour chaque stagiaire, seules ses N dernières MSP évaluées (les plus récentes, par numéro de passage) comptent pour la validation des compétences — même si le stagiaire en a fait davantage.</div>
+      ${S.formation && S.formation.necessite_isp ? `
+      <label>Jour de présence ISP (jour relatif, ex : 1 = J1)</label>
+      <input id="pr-jour-isp" type="number" min="1" value="${sess.jour_isp ?? ''}">
+      <div class="info">Ce jour sera mis en évidence en fond vert dans le chronogramme. Cette formation nécessite l'intervention d'un ISP.</div>` : ''}
       <button class="btn" onclick="enregistrerParametresStage()">Enregistrer</button>
     </div>`;
 }
@@ -1832,11 +1853,14 @@ async function enregistrerParametresStage() {
   const seuilECA = Number($('pr-seuil-eca').value) || 4;
   const nbMspRaw = $('pr-nb-msp').value.trim();
   const nbMsp = nbMspRaw ? Number(nbMspRaw) : null;
-  const { error } = await sb.from('sessions').update({
-    seuil_na_jury: seuilNA, seuil_eca_jury: seuilECA, nb_msp_certification: nbMsp,
-  }).eq('id', S.session.id);
+  const payload = { seuil_na_jury: seuilNA, seuil_eca_jury: seuilECA, nb_msp_certification: nbMsp };
+  if ($('pr-jour-isp')) {
+    const jourIspRaw = $('pr-jour-isp').value.trim();
+    payload.jour_isp = jourIspRaw ? Number(jourIspRaw) : null;
+  }
+  const { error } = await sb.from('sessions').update(payload).eq('id', S.session.id);
   if (error) return toast(error.message, false);
-  S.session.seuil_na_jury = seuilNA; S.session.seuil_eca_jury = seuilECA; S.session.nb_msp_certification = nbMsp;
+  Object.assign(S.session, payload);
   toast('Paramètres du stage enregistrés');
 }
 
@@ -2041,13 +2065,39 @@ function afficherComparatifCourbe(stagiaireId, zoneId) {
     return `<div class="carte-courbe">
       <h4>${esc(c.code)} — ${esc(c.libelle)}</h4>
       ${_svgLegendeCourbe(toutes)}
-      ${_svgCourbeMultipleWeb(toutes, numerosMSP, 10)}
+      ${_svgCourbeMultipleWeb(toutes, numerosMSP, 10, mesPassages.map(p => p.id), stagiaireId)}
     </div>`;
   }).join('');
 
   $(zoneId).innerHTML = `
-    <div class="info" style="margin-bottom:8px">Échelle 0 à 10 (A+ = 10, A = 7, ECA = 5, NA = 0) · n° de MSP en abscisse · courbe formateur toujours en orange.</div>
+    <div class="info" style="margin-bottom:8px">Échelle 0 à 10 (A+ = 10, A = 7, ECA = 5, NA = 0) · n° de MSP en abscisse (cliquable) · courbe formateur toujours en orange.</div>
+    <div id="cmp-detail-passage"></div>
     ${cartes || '<p class="info">Aucune compétence avec critères détaillés pour cette formation.</p>'}`;
+}
+
+// Cliquer sur un n° de MSP en abscisse d'une courbe affiche ici l'essentiel pour comprendre un
+// pic bas ou haut : remarque du formateur, APP proposées, mot du stagiaire et mot du formateur
+// pour ce passage précis — sans avoir à rebasculer sur l'onglet Tableau ou Évaluations.
+function afficherDetailPassageComparatif(stagiaireId, passageId) {
+  const zone = $('cmp-detail-passage');
+  if (!zone) return;
+  const p = S.data.passages.find(x => x.id === passageId);
+  const ev = S.data.evaluations.find(x => x.passage_id === passageId && x.stagiaire_id === stagiaireId);
+  const auto = S.data.autoevaluations.find(x => x.passage_id === passageId && x.stagiaire_id === stagiaireId);
+  const theme = p ? S.formation.themes.find(t => t.id === p.theme_id) : null;
+  zone.innerHTML = `
+    <div class="carte" style="background:#f7f7f9;margin-bottom:12px">
+      <h4>Détail — MSP n°${p ? p.numero : '?'} · ${esc(p ? p.jour : '')} · ${esc(theme ? theme.libelle : '')}</h4>
+      <label>Remarque formateur</label>
+      <p>${ev && ev.commentaire ? esc(ev.commentaire) : '<span class="info">— non renseignée —</span>'}</p>
+      <label>APP proposées</label>
+      <p>${[ev?.app1, ev?.app2, ev?.app3].filter(Boolean).map(esc).join(' · ') || '<span class="info">— aucune —</span>'}</p>
+      <label>Mot du stagiaire (ressenti)</label>
+      <p>${auto && auto.ressenti ? esc(auto.ressenti) : '<span class="info">— non renseigné —</span>'}</p>
+      <label>Mot du formateur</label>
+      <p>${ev && ev.ressenti_mot ? esc(ev.ressenti_mot) : '<span class="info">— non renseigné —</span>'}</p>
+    </div>`;
+  zone.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 // Une ligne par série (code en gras + libellé complet du critère) plutôt qu'une légende en
@@ -2061,7 +2111,7 @@ function _svgLegendeCourbe(series) {
 
 // SVG en viewBox (pas de taille fixe en px) : s'adapte à la largeur du conteneur, du téléphone
 // à l'écran large, sans recalcul JS ni redessin au resize.
-function _svgCourbeMultipleWeb(series, numerosMSP, max) {
+function _svgCourbeMultipleWeb(series, numerosMSP, max, passagesIds, stagiaireId) {
   const W = 320, H = 130, PAD_L = 20, PAD_R = 6, PAD_T = 8, PAD_B = 16;
   const largeur = W - PAD_L - PAD_R, hauteur = H - PAD_T - PAD_B;
   const n = numerosMSP.length;
@@ -2092,8 +2142,14 @@ function _svgCourbeMultipleWeb(series, numerosMSP, max) {
     });
   });
 
+  // N° de MSP cliquable (quand on connaît le stagiaire + l'id du passage) : ouvre le détail de
+  // la mise en situation pour comprendre un pic haut ou bas de la courbe (remarque formateur,
+  // APP proposées, mots stagiaire/formateur) — voir afficherDetailPassageComparatif.
   numerosMSP.forEach((num, i) => {
-    svg += `<text x="${px(i)}" y="${H - 3}" font-size="8" fill="#999" text-anchor="middle">${esc(String(num))}</text>`;
+    const clic = (passagesIds && passagesIds[i] != null && stagiaireId)
+      ? ` style="cursor:pointer;font-weight:bold" onclick="afficherDetailPassageComparatif(${stagiaireId}, ${passagesIds[i]})"`
+      : '';
+    svg += `<text x="${px(i)}" y="${H - 3}" font-size="8" fill="#999" text-anchor="middle"${clic}>${esc(String(num))}</text>`;
   });
 
   svg += `</svg>`;
@@ -2396,6 +2452,13 @@ function ecranFormulaireFormation(id) {
       </div>
     </div>
 
+    <h3>Intervention ISP (infirmier sapeur-pompier)</h3>
+    <label><input type="checkbox" id="fm-necessite-isp" style="width:auto" ${f?.necessite_isp ? 'checked' : ''} onchange="$('fm-jour-isp-ligne').style.display = this.checked ? '' : 'none'"> Cette formation nécessite l'intervention d'un ISP</label>
+    <div class="ligne" id="fm-jour-isp-ligne" style="display:${f?.necessite_isp ? '' : 'none'}">
+      <div><label>Jour de présence ISP par défaut (ex : 1 = J1)</label><input id="fm-jour-isp" type="number" min="1" value="${f?.jour_isp_defaut ?? ''}">
+        <div class="info">Jour relatif repris à la création de chaque session (réglable ensuite dans les Paramètres de la session). Ce jour sera mis en évidence en vert dans le chronogramme.</div></div>
+    </div>
+
     <h3>Barème d'encadrement (RIOFE) — RP/formateurs vis-à-vis du nombre de stagiaires</h3>
     <div id="fm-bareme-liste" style="margin-bottom:8px"></div>
     <div class="ligne">
@@ -2429,6 +2492,8 @@ async function enregistrerFormation(id) {
     bareme_formateurs: _baremeEnCours,
     utilise_types_msp: $('fm-types-msp').checked,
     mode_validation: $('fm-types-msp').checked ? $('fm-mode-validation').value : 'standard',
+    necessite_isp: $('fm-necessite-isp').checked,
+    jour_isp_defaut: $('fm-necessite-isp').checked && $('fm-jour-isp').value ? Number($('fm-jour-isp').value) : null,
   };
   const req = id ? sb.from('formations').update(payload).eq('id', id) : sb.from('formations').insert(payload);
   const { error } = await req;

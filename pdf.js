@@ -780,6 +780,7 @@ function _pdfCanvasHautChevalet(s, urlApp) {
   const joursTous = Array.from({ length: nbJours }, (_, i) => 'J' + (i + 1));
   const joursAffiches = joursTous.slice(0, 7);
   const zoneX = mm(8), zoneY = mm(20), zoneW = canvas.width - qrTaille - mm(24), zoneH = mm(100);
+  const jourISP = (S.session && S.session.jour_isp) ? 'J' + S.session.jour_isp : null;
 
   if (nbJours > 7) {
     ctx.fillStyle = '#666';
@@ -796,7 +797,7 @@ function _pdfCanvasHautChevalet(s, urlApp) {
     ctx.font = 'bold ' + mm(3) + 'px Arial';
     ctx.fillStyle = '#c8102e';
     ctx.textAlign = 'center';
-    joursAffiches.forEach((j, i) => ctx.fillText(j, zoneX + i * colW + colW / 2, zoneY + mm(3)));
+    joursAffiches.forEach((j, i) => ctx.fillText(j + (j === jourISP ? ' 🩺' : ''), zoneX + i * colW + colW / 2, zoneY + mm(3)));
     ctx.textAlign = 'left';
     ['matin', 'apres_midi'].forEach((demi, ri) => {
       const rowY = zoneY + mm(6) + ri * rowH;
@@ -808,6 +809,10 @@ function _pdfCanvasHautChevalet(s, urlApp) {
       ctx.fillText(libDemi, zoneX, rowY - mm(1));
       joursAffiches.forEach((j, ci) => {
         const cellX = zoneX + ci * colW, cellY = rowY;
+        if (j === jourISP) {
+          ctx.fillStyle = '#e2f5e5';
+          ctx.fillRect(cellX, cellY, colW - mm(1), rowH - mm(2));
+        }
         ctx.strokeRect(cellX, cellY, colW - mm(1), rowH - mm(2));
         const blocs = (typeof _blocsPlanningCellule === 'function') ? _blocsPlanningCellule(j, demi) : [];
         ctx.fillStyle = '#222';
