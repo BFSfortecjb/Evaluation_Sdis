@@ -802,7 +802,10 @@ function _pdfCanvasHautChevalet(s, urlApp) {
       const rowY = zoneY + mm(6) + ri * rowH;
       ctx.fillStyle = '#888';
       ctx.font = mm(2.4) + 'px Arial';
-      ctx.fillText(demi === 'matin' ? 'MATIN' : 'APRÈS-MIDI', zoneX, rowY - mm(1));
+      const libDemi = (typeof HORAIRES_DEMI === 'object' && HORAIRES_DEMI)
+        ? (demi === 'matin' ? 'MATIN (' + HORAIRES_DEMI.matin + ')' : 'APRÈS-MIDI (' + HORAIRES_DEMI.apres_midi + ')')
+        : (demi === 'matin' ? 'MATIN' : 'APRÈS-MIDI');
+      ctx.fillText(libDemi, zoneX, rowY - mm(1));
       joursAffiches.forEach((j, ci) => {
         const cellX = zoneX + ci * colW, cellY = rowY;
         ctx.strokeRect(cellX, cellY, colW - mm(1), rowH - mm(2));

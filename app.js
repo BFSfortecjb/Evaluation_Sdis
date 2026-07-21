@@ -726,6 +726,15 @@ async function ouvrirSession(sessionId) {
   S.session = sess;
   await chargerFormation(sess.formation_id);
   await chargerDonneesSession(sessionId);
+  // Blocs de planning imposés par la formation (réactivation de mémoire, bilan journalier...) :
+  // instanciés dès l'ouverture de la session (pas seulement quand on visite l'onglet
+  // Chronogramme), pour qu'ils soient déjà en place si un stagiaire consulte son programme avant
+  // que le RP n'ait ouvert cet onglet lui-même. Fonction définie dans planning.js — protégée par
+  // ce typeof pour ne jamais faire planter l'appli si ce fichier n'a pas encore été ré-uploadé.
+  if (typeof assurerBlocsPlanningFixes === 'function') {
+    const aCree = await assurerBlocsPlanningFixes();
+    if (aCree) await chargerDonneesSession(sessionId);
+  }
 
   $('session-titre').textContent = sess.formations.libelle + ' — ' + (sess.lieu || '');
   $('session-infos').textContent =

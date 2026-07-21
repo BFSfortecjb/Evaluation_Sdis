@@ -4,14 +4,33 @@
 // limite le risque qu'une future modification ici casse par erreur une fonctionnalité du reste
 // de l'appli (Stagiaires, Évaluations, Validation...), et inversement.
 // Dépend de : core.js (sb, S, $, esc, toast) + app.js (joursFormation, chargerDonneesSession).
-// Chargé après app.js et avant pdf.js dans index.html (pdf.js utilise _blocsPlanningCellule
-// pour dessiner le chronogramme du chevalet).
+// Chargé après app.js et avant pdf.js dans index.html (pdf.js utilise _blocsPlanningCellule et
+// HORAIRES_DEMI pour dessiner le chronogramme du chevalet).
+
+// Horaires fixes des journées de formation (mêmes pour toutes les formations : 40h sur 5 jours,
+// 8h-12h / 13h-17h, soit 8h par jour) — affichés à titre indicatif à côté de Matin/Après-midi,
+// partout où le chronogramme est montré (onglet Planning, vue stagiaire, chevalet PDF). Si une
+// formation particulière a un jour d'horaires différents un jour donné, ça reste gérable à la
+// marge via l'annotation d'un bloc ; ce n'est qu'un repère, pas une contrainte de saisie.
+const HORAIRES_DEMI = { matin: '8h – 12h', apres_midi: '13h – 17h' };
 
 // ---------- Blocs de planning imposés (GFor, Paramètres formations) ----------
 // Modèles définis au niveau de la formation (pas d'une session précise) : la partie « imposée »
 // du programme, commune à toutes les sessions de cette formation. Le RP les place ensuite
 // librement dans le chronogramme de sa propre session (voir la réserve « Blocs à placer » dans
 // ongletPlanning ci-dessous) — jour et demi-journée restent à sa discrétion.
+// Un modèle « fixe » (jour_debut + demi_journee renseignés) se replace automatiquement au même
+// jour relatif et à la même demi-journée sur CHAQUE session de la formation (ex. réactivation de
+// mémoire tous les matins de J2 à J5, bilan journalier tous les après-midis de J1 à J4) : le RP
+// n'a rien à glisser, ça apparaît directement dans son chronogramme (voir _assurerBlocsAutoPlanning
+// dans ongletPlanning). Un modèle « libre » (demi_journee laissé vide) reste à placer à la main,
+// comme avant, via la réserve « Blocs à placer ».
+function _optionsDemiModele(m) {
+  return `<option value="" ${!m?.demi_journee ? 'selected' : ''}>Libre (à placer à la main)</option>
+    <option value="matin" ${m?.demi_journee === 'matin' ? 'selected' : ''}>Matin, fixe</option>
+    <option value="apres_midi" ${m?.demi_journee === 'apres_midi' ? 'selected' : ''}>Après-midi, fixe</option>`;
+}
+
 async function ecranBlocsPlanningModeles(formationId) {
   const f = (window._formations || []).find(x => x.id === formationId);
   const { data: modeles, error } = await sb.from('blocs_planning_modeles').select('*').eq('formation_id', formationId).order('ordre');
@@ -22,6 +41,12 @@ async function ecranBlocsPlanningModeles(formationId) {
       <td><input value="${esc(m.ordre)}" type="number" style="width:56px" id="bpm-ordre-${m.id}"></td>
       <td><input value="${esc(m.libelle)}" id="bpm-lib-${m.id}"></td>
       <td><input value="${esc(m.annotation || '')}" id="bpm-annot-${m.id}"></td>
+      <td><select id="bpm-demi-${m.id}" onchange="$('bpm-jours-'+${m.id}).style.display = this.value ? '' : 'none'">${_optionsDemiModele(m)}</select></td>
+      <td id="bpm-jours-${m.id}" style="display:${m.demi_journee ? '' : 'none'};white-space:nowrap">
+        <input id="bpm-jd-${m.id}" type="number" min="1" style="width:52px" value="${m.jour_debut || 1}" title="Jour de début (J..)">
+        à
+        <input id="bpm-jf-${m.id}" type="number" min="1" style="width:52px" value="${m.jour_fin || m.jour_debut || 1}" title="Jour de fin (J..)">
+      </td>
       <td style="white-space:nowrap">
         <button class="btn petit secondaire" onclick="enregistrerBlocModele(${m.id})">💾</button>
         <button class="btn petit secondaire" onclick="supprBlocModele(${m.id})">✕</button>
@@ -31,28 +56,40 @@ async function ecranBlocsPlanningModeles(formationId) {
   $('staff-dashboard').innerHTML = `<div class="carte">
     <span class="lien-retour" onclick="ecranParametresFormations()">← Retour aux paramètres formations</span>
     <h2>Planning imposé — ${esc(f ? f.libelle : '')}</h2>
-    <div class="info">Ces blocs représentent la partie du programme commune à toutes les sessions de cette formation
-      (ex. un module théorique). Ils apparaissent dans la réserve « Blocs à placer » de l'onglet Chronogramme de
-      chaque session ; le RP choisit lui-même le jour et la demi-journée où les placer.</div>
+    <div class="info">Ces blocs représentent la partie du programme commune à toutes les sessions de cette formation.
+      Un bloc « fixe » (jour + demi-journée renseignés) se replace automatiquement au même endroit sur chaque session
+      (ex. réactivation de mémoire tous les matins de J2 à J5). Un bloc « libre » reste à placer à la main par le RP,
+      via la réserve « Blocs à placer » de l'onglet Chronogramme.</div>
     <div class="table-scroll"><table>
-      <tr><th>Ordre</th><th>Libellé</th><th>Annotation (facultatif)</th><th></th></tr>
-      ${lignes || '<tr><td colspan="4" class="info">Aucun bloc imposé pour cette formation.</td></tr>'}
+      <tr><th>Ordre</th><th>Libellé</th><th>Annotation (facultatif)</th><th>Placement</th><th>Jours (si fixe)</th><th></th></tr>
+      ${lignes || '<tr><td colspan="6" class="info">Aucun bloc imposé pour cette formation.</td></tr>'}
     </table></div>
     <h3>Ajouter un bloc imposé</h3>
     <div class="ligne">
       <div><label>Ordre</label><input id="bpm-new-ordre" type="number" value="${(modeles || []).length + 1}"></div>
-      <div><label>Libellé</label><input id="bpm-new-lib" placeholder="ex : Module théorique commun"></div>
+      <div><label>Libellé</label><input id="bpm-new-lib" placeholder="ex : Réactivation de mémoire"></div>
       <div><label>Annotation (facultatif, réservée à l'encadrement)</label><input id="bpm-new-annot"></div>
+    </div>
+    <div class="ligne">
+      <div><label>Placement</label><select id="bpm-new-demi" onchange="$('bpm-new-jours').style.display = this.value ? '' : 'none'">${_optionsDemiModele(null)}</select></div>
+      <div id="bpm-new-jours" style="display:none">
+        <label>Du jour … au jour …</label>
+        <div class="ligne"><input id="bpm-new-jd" type="number" min="1" value="1"><input id="bpm-new-jf" type="number" min="1" value="1"></div>
+      </div>
       <div style="align-self:flex-end"><button class="btn petit" onclick="ajouterBlocModele(${formationId})">➕ Ajouter</button></div>
     </div>
   </div>`;
 }
 
 async function enregistrerBlocModele(id) {
+  const demi = $('bpm-demi-' + id).value || null;
   const { error } = await sb.from('blocs_planning_modeles').update({
     ordre: Number($('bpm-ordre-' + id).value) || 1,
     libelle: $('bpm-lib-' + id).value.trim(),
     annotation: $('bpm-annot-' + id).value.trim() || null,
+    demi_journee: demi,
+    jour_debut: demi ? (Number($('bpm-jd-' + id).value) || 1) : null,
+    jour_fin: demi ? (Number($('bpm-jf-' + id).value) || Number($('bpm-jd-' + id).value) || 1) : null,
   }).eq('id', id);
   if (error) return toast(error.message, false);
   toast('Bloc imposé mis à jour');
@@ -61,10 +98,14 @@ async function enregistrerBlocModele(id) {
 async function ajouterBlocModele(formationId) {
   const libelle = $('bpm-new-lib').value.trim();
   if (!libelle) return toast('Libellé requis', false);
+  const demi = $('bpm-new-demi').value || null;
   const { error } = await sb.from('blocs_planning_modeles').insert({
     formation_id: formationId, libelle,
     annotation: $('bpm-new-annot').value.trim() || null,
     ordre: Number($('bpm-new-ordre').value) || 1,
+    demi_journee: demi,
+    jour_debut: demi ? (Number($('bpm-new-jd').value) || 1) : null,
+    jour_fin: demi ? (Number($('bpm-new-jf').value) || Number($('bpm-new-jd').value) || 1) : null,
   });
   if (error) return toast(error.message, false);
   toast('Bloc imposé ajouté');
@@ -94,24 +135,59 @@ function _blocsPlanningCellule(jour, demi) {
 // ouverture/rafraîchissement de l'onglet — coût négligeable, une seule petite requête).
 let _modelesPlanningCourants = [];
 
-// Modèles pas encore placés dans CETTE session : ceux dont aucun bloc_planning de la session ne
-// référence leur id. Dès qu'on supprime le dernier bloc placé pour un modèle, il revient donc
-// automatiquement dans la réserve.
+// Modèles « libres » pas encore placés dans CETTE session : ceux dont aucun bloc_planning de la
+// session ne référence leur id, ET qui n'ont pas de jour/demi-journée fixe (un modèle fixe ne
+// passe jamais par la réserve, voir _assurerBlocsAutoPlanning). Dès qu'on supprime le dernier
+// bloc libre placé pour un modèle, il revient donc automatiquement dans la réserve.
 function _modelesNonPlaces() {
   const idsPlaces = new Set((S.data.blocsPlanning || []).filter(b => b.modele_id).map(b => b.modele_id));
-  return _modelesPlanningCourants.filter(m => !idsPlaces.has(m.id));
+  return _modelesPlanningCourants.filter(m => !m.demi_journee && !idsPlaces.has(m.id));
+}
+
+// Instancie automatiquement, pour la session en cours, les blocs issus des modèles « fixes »
+// (jour_debut/jour_fin/demi_journee renseignés) — ex. réactivation de mémoire tous les matins de
+// J2 à J5. Ne crée que ce qui manque encore (idempotent : sans effet si déjà placé, y compris si
+// le RP l'a depuis déplacé ailleurs — on ne recrée alors une instance QUE pour les jours où il n'y
+// en a pas encore). Retourne true si au moins un bloc a été créé.
+// Appelée à la fois par ongletPlanning (RP/GFor consultant l'onglet Chronogramme) et par
+// ouvrirSession dans app.js (dès l'ouverture de la session, staff uniquement — le stagiaire, en
+// accès anonyme, n'a pas le droit d'écrire dans blocs_planning) pour que les blocs imposés soient
+// déjà en place avant même que quelqu'un aille voir l'onglet, garantissant qu'ils apparaissent
+// aussi côté vue stagiaire (accès lecture seule).
+async function assurerBlocsPlanningFixes() {
+  const { data: modeles, error } = await sb.from('blocs_planning_modeles').select('*').eq('formation_id', S.formation.id).order('ordre');
+  if (error) return false;
+  _modelesPlanningCourants = modeles || [];
+  const fixes = _modelesPlanningCourants.filter(m => m.demi_journee && m.jour_debut);
+  if (!fixes.length) return false;
+  const nbJours = (S.formation && S.formation.nb_jours) || 5;
+  let cree = false;
+  for (const m of fixes) {
+    const jourFin = Math.min(m.jour_fin || m.jour_debut, nbJours);
+    for (let j = m.jour_debut; j <= jourFin; j++) {
+      const jourStr = 'J' + j;
+      const dejaPlace = (S.data.blocsPlanning || []).some(b => b.modele_id === m.id && b.jour === jourStr && b.demi_journee === m.demi_journee);
+      if (dejaPlace) continue;
+      const ordre = _blocsPlanningCellule(jourStr, m.demi_journee).length;
+      const { error: errIns } = await sb.from('blocs_planning').insert({
+        session_id: S.session.id, jour: jourStr, demi_journee: m.demi_journee, ordre,
+        libelle: m.libelle, annotation: m.annotation, modele_id: m.id,
+      });
+      if (!errIns) cree = true;
+    }
+  }
+  return cree;
 }
 
 async function ongletPlanning() {
-  const { data: modeles, error } = await sb.from('blocs_planning_modeles').select('*').eq('formation_id', S.formation.id).order('ordre');
-  if (error) return toast(error.message, false);
-  _modelesPlanningCourants = modeles || [];
+  const aCree = await assurerBlocsPlanningFixes();
+  if (aCree) await chargerDonneesSession(S.session.id);
   _rendreOngletPlanning();
 }
 
 function _rendreOngletPlanning() {
   const jours = joursFormation();
-  const demiJournees = [['matin', 'Matin'], ['apres_midi', 'Après-midi']];
+  const demiJournees = [['matin', 'Matin (' + HORAIRES_DEMI.matin + ')'], ['apres_midi', 'Après-midi (' + HORAIRES_DEMI.apres_midi + ')']];
   const reserve = _modelesNonPlaces();
 
   let cellules = '';
@@ -253,7 +329,7 @@ function blocStagiaireChronogramme() {
   return `<div class="carte">
     <h2>Programme de la semaine</h2>
     <div class="table-scroll"><table>
-      <tr><th>Jour</th><th>Matin</th><th>Après-midi</th></tr>
+      <tr><th>Jour</th><th>Matin (${esc(HORAIRES_DEMI.matin)})</th><th>Après-midi (${esc(HORAIRES_DEMI.apres_midi)})</th></tr>
       ${lignes}
     </table></div>
   </div>`;
