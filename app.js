@@ -2329,10 +2329,31 @@ function _champsDecisionEntretien(decision, donnees, verrouille, stagiaireId) {
   return '';
 }
 
+// Phrase institutionnelle générique, pré-remplie automatiquement quand le RP choisit Ajournement
+// ou Résolution — volontairement neutre (résultats des évaluations de la semaine + critères
+// RIOFE), qu'il s'agisse d'un motif technique ou de savoir-être : le RP n'a qu'à compléter après
+// « au motif : » avec l'élément propre à ce stagiaire.
+function _texteInstitutionnelDecision(decision) {
+  const formationLib = S.formation ? S.formation.libelle : '';
+  const debut = (S.session && S.session.date_debut) || '?';
+  const fin = (S.session && S.session.date_fin) || '?';
+  const lieu = (S.session && S.session.lieu) || '?';
+  const cadre = `Au vu des résultats des évaluations de la semaine et des critères du RIOFE, l'équipe pédagogique de la formation ${formationLib} du ${debut} au ${fin} au CIS de ${lieu}`;
+  if (decision === 'ajournement') return `${cadre} a décidé l'ajournement du stagiaire au motif : `;
+  if (decision === 'resolution') return `${cadre} a décidé la mise en place d'un accompagnement au motif : `;
+  return '';
+}
+
 function _onChangeDecisionEntretien(stagiaireId) {
   const val = $('en-decision').value;
   $('en-decision-detail-ligne').style.display = val === 'normal' ? 'none' : '';
   $('en-decision-detail-label').textContent = val === 'ajournement' ? "Motif(s) d'ajournement" : val === 'resolution' ? "Constat lors de l'entretien" : 'Motifs';
+  // Pré-remplissage uniquement si le champ est encore vide, pour ne jamais écraser un texte déjà
+  // rédigé par le RP (ex. en rebasculant d'un type de décision à l'autre après coup).
+  const champDetail = $('en-decision-detail');
+  if (champDetail && !champDetail.value.trim() && (val === 'ajournement' || val === 'resolution')) {
+    champDetail.value = _texteInstitutionnelDecision(val);
+  }
   $('en-decision-champs').innerHTML = _champsDecisionEntretien(val, {}, false, stagiaireId);
 }
 
@@ -2819,14 +2840,23 @@ async function ecranAccueilStagiaire() {
     .map(e => S.data.passages.find(p => p.id === e.passage_id))
     .filter(Boolean).sort((a, b) => a.numero - b.numero);
 
-  const blocs = mesPassages.map(p => {
-    const theme = S.formation.themes.find(t => t.id === p.theme_id);
-    const auto = S.data.autoevaluations.find(a => a.passage_id === p.id && a.stagiaire_id === stagiaireId);
-    return `<button class="btn-liste" onclick="formAutoEval(${p.id})">
-      Passage n°${p.numero} · ${esc(p.jour)} · ${esc(theme ? theme.libelle : '')}
-      ${auto ? '<span class="niv niv-A">auto-éval faite ✓</span>' : '<span class="niv niv-NE">à faire</span>'}
-    </button>`;
-  }).join('');
+  // Les auto-évaluations pas encore faites remontent en tête de liste (plus facile à repérer ce
+  // qu'il reste à faire) ; à l'intérieur de chaque groupe (à faire / déjà faites), tri par numéro.
+  const blocs = [...mesPassages]
+    .sort((a, b) => {
+      const aFaite = S.data.autoevaluations.some(x => x.passage_id === a.id && x.stagiaire_id === stagiaireId);
+      const bFaite = S.data.autoevaluations.some(x => x.passage_id === b.id && x.stagiaire_id === stagiaireId);
+      if (aFaite !== bFaite) return aFaite ? 1 : -1;
+      return a.numero - b.numero;
+    })
+    .map(p => {
+      const theme = S.formation.themes.find(t => t.id === p.theme_id);
+      const auto = S.data.autoevaluations.find(a => a.passage_id === p.id && a.stagiaire_id === stagiaireId);
+      return `<button class="btn-liste" onclick="formAutoEval(${p.id})">
+        Passage n°${p.numero} · ${esc(p.jour)} · ${esc(theme ? theme.libelle : '')}
+        ${auto ? '<span class="niv niv-A">auto-éval faite ✓</span>' : '<span class="niv niv-NE">à faire</span>'}
+      </button>`;
+    }).join('');
 
   $('stagiaire-contenu').innerHTML = `
     ${blocStagiaireChronogramme()}
