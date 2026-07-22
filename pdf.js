@@ -783,42 +783,136 @@ async function genererPDFEntretien(stagiaireId, type) {
   toast('Compte-rendu d\'entretien généré');
 }
 
+// Petite case à cocher dessinée à la main (☐/☑ n'existent pas dans la police Helvetica de jsPDF) —
+// un carré, avec un X à l'intérieur si cochée.
+function _pdfCase(doc, x, y, cochee) {
+  doc.setDrawColor(80, 80, 80);
+  doc.setLineWidth(0.2);
+  doc.rect(x, y - 3, 3.5, 3.5);
+  if (cochee) {
+    doc.setFontSize(8);
+    doc.setTextColor(30, 30, 30);
+    doc.text('X', x + 0.6, y - 0.2);
+  }
+}
+
+// ---------- Fiche de suivi et de résolution (livrable 6) — reproduit le modèle SDIS29 fourni ----------
 async function genererPDFDecisionEntretien(stagiaireId, type) {
   if (!window.jspdf) return toast('Bibliothèque PDF non chargée', false);
   const s = S.data.stagiaires.find(x => x.id === stagiaireId);
   const e = (S.data.entretiens || []).find(x => x.stagiaire_id === stagiaireId && x.type === type);
-  if (!s || !e || e.decision === 'normal') return toast('Aucune décision d\'ajournement/résolution pour cet entretien', false);
+  if (!s || !e || e.decision === 'normal') return toast("Aucune décision d'ajournement/résolution pour cet entretien", false);
 
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
+  const d = e.decision_donnees || {};
   const estAjournement = e.decision === 'ajournement';
-  const titre = estAjournement ? "Fiche d'ajournement" : 'Fiche de résolution';
-  _pdfEnTete(doc, titre, (S.formation ? S.formation.libelle : '') + ' — ' + (S.session ? (S.session.lieu || '') : ''));
+  const titre = estAjournement ? "Fiche de motivation d'ajournement" : 'Fiche de suivi et de résolution';
 
-  let y = 32;
-  doc.setFontSize(11);
-  doc.text(`Stagiaire : ${s.prenom} ${s.nom}`, 14, y); y += 7;
-  doc.text(`Entretien concerné : ${type === 'mi_parcours' ? 'mi-parcours' : 'fin de stage'} du ${e.date_entretien || '—'}`, 14, y); y += 10;
+  let y = 12;
+  try { doc.addImage(LOGO_SDIS29, 'PNG', 14, y, 18, 18); } catch (err) { /* logo optionnel */ }
+  doc.setFontSize(14);
+  doc.setTextColor(30, 30, 30);
+  doc.text(titre + ' –', 105, y + 5, { align: 'center' });
+  doc.text(`Formation ${S.formation ? S.formation.libelle : ''}`, 105, y + 12, { align: 'center' });
+  y += 26;
 
   doc.setFontSize(10);
-  doc.text(estAjournement ? 'Motifs de l\'ajournement :' : 'Mesures de résolution :', 14, y); y += 6;
+  doc.text('Informations stagiaire :', 14, y); y += 6;
   doc.setFontSize(9);
-  const lignes = doc.splitTextToSize(e.decision_detail || '—', 180);
-  doc.text(lignes, 14, y); y += lignes.length * 5 + 8;
+  doc.text(`Nom / Prénom : ${s.nom} ${s.prenom}`, 14, y);
+  doc.text(`Matricule : ${s.matricule || '—'}`, 110, y); y += 6;
+  doc.text(`Centre d'incendie et de secours : ${s.cis || '—'}`, 14, y); y += 6;
+  doc.text(`Lieu / Dates de formation : ${(S.session ? S.session.lieu || '—' : '—')} — ${(S.session ? (S.session.date_debut || '?') + ' → ' + (S.session.date_fin || '?') : '')}`, 14, y); y += 6;
+  doc.text(`Responsable Pédagogique : ${(S.session && S.session.responsable) || '—'}`, 14, y); y += 10;
 
-  if (e.commentaire) {
+  doc.setFontSize(10);
+  doc.text(estAjournement ? "Motif(s) d'ajournement :" : "Constat lors de l'entretien :", 14, y); y += 6;
+  doc.setFontSize(9);
+  const lignesConstat = doc.splitTextToSize(e.decision_detail || '—', 180);
+  doc.text(lignesConstat, 14, y); y += lignesConstat.length * 5 + 8;
+
+  if (estAjournement) {
+    // ---------- Compétences évaluées (A / ECA / NA) ----------
     doc.setFontSize(10);
-    doc.text('Rappel du commentaire de l\'entretien :', 14, y); y += 6;
+    doc.text('Compétences évaluées :', 14, y); y += 4;
+    const competences = (S.formation && S.formation.competences) || [];
+    const comp = d.competences || {};
+    if (competences.length) {
+      doc.autoTable({
+        startY: y,
+        head: [['Compétence', 'Validée (A)', 'En cours (ECA)', 'Non acquise (NA)']],
+        body: competences.map(c => [`${c.code} – ${c.libelle}`, '', '', '']),
+        styles: { fontSize: 8, cellPadding: 2 },
+        headStyles: { fillColor: ROUGE_SDIS },
+        columnStyles: { 1: { cellWidth: 25, halign: 'center' }, 2: { cellWidth: 28, halign: 'center' }, 3: { cellWidth: 30, halign: 'center' } },
+        margin: { left: 14, right: 14 },
+        didDrawCell: (data) => {
+          if (data.section !== 'body' || data.column.index === 0) return;
+          const c = competences[data.row.index];
+          const valeur = data.column.index === 1 ? 'A' : data.column.index === 2 ? 'ECA' : 'NA';
+          _pdfCase(doc, data.cell.x + data.cell.width / 2 - 1.75, data.cell.y + data.cell.height / 2 + 1.5, comp[c.id] === valeur);
+        },
+      });
+      y = doc.lastAutoTable.finalY + 8;
+    } else {
+      doc.setFontSize(9);
+      doc.text('Aucune compétence définie pour cette formation.', 14, y); y += 8;
+    }
+
+    // ---------- Proposition de suites à donner ----------
+    doc.setFontSize(10);
+    doc.text('Proposition de suites à donner :', 14, y); y += 6;
     doc.setFontSize(9);
-    const lignesC = doc.splitTextToSize(e.commentaire, 180);
-    doc.text(lignesC, 14, y); y += lignesC.length * 5 + 8;
+    const suites = d.suites || [];
+    _pdfCase(doc, 14, y, suites.includes('rattrapage_cible'));
+    doc.text(`Rattrapage ciblé (APP / MSP complémentaires), nombre de jours : ${d.nb_jours_rattrapage ?? '—'}`, 20, y); y += 6;
+    _pdfCase(doc, 14, y, suites.includes('repassage_complet'));
+    doc.text('Repassage de la formation complète (1 semaine)', 20, y); y += 10;
+  } else {
+    // ---------- Difficultés identifiées / Mesures de résolution (deux colonnes) ----------
+    doc.setFontSize(10);
+    doc.text('Difficultés identifiées :', 14, y);
+    doc.text('Mesures de résolution proposées :', 110, y);
+    y += 6;
+    doc.setFontSize(9);
+    const diff = d.difficultes || [];
+    const mes = d.mesures || [];
+    let yG = y, yD = y;
+    _pdfCase(doc, 14, yG, diff.includes('technique')); doc.text('Techniques (gestes, protocoles)', 20, yG); yG += 6;
+    _pdfCase(doc, 14, yG, diff.includes('organisationnelle')); doc.text('Organisationnelles (méthode, matériel)', 20, yG); yG += 6;
+    _pdfCase(doc, 14, yG, diff.includes('comportementale')); doc.text('Comportementales (attitude, intégration)', 20, yG); yG += 6;
+    _pdfCase(doc, 14, yG, !!d.difficultes_autre); doc.text('Autres : ' + (d.difficultes_autre_texte || ''), 20, yG, { maxWidth: 75 }); yG += 6;
+
+    _pdfCase(doc, 110, yD, mes.includes('accompagnement')); doc.text('Accompagnement spécifique (formateur référent / APP ciblé)', 116, yD, { maxWidth: 80 }); yD += 10;
+    _pdfCase(doc, 110, yD, mes.includes('travail_individuel')); doc.text('Travail individuel (FOAD, référentiel, attitude…)', 116, yD, { maxWidth: 80 }); yD += 10;
+    if (d.mesures_detail) {
+      const lignesMes = doc.splitTextToSize(d.mesures_detail, 80);
+      doc.text(lignesMes, 116, yD); yD += lignesMes.length * 5;
+    }
+    y = Math.max(yG, yD) + 6;
+
+    doc.setFontSize(10);
+    doc.text('Engagements du stagiaire :', 14, y); y += 6;
+    doc.setFontSize(9);
+    const lignesEng = doc.splitTextToSize(d.engagements || '—', 180);
+    doc.text(lignesEng, 14, y); y += lignesEng.length * 5 + 8;
+
+    doc.setFontSize(10);
+    doc.text('Suivi / Évaluation de la mise en œuvre :', 14, y); y += 6;
+    doc.setFontSize(9);
+    const suivi = d.suivi || [];
+    _pdfCase(doc, 14, y, suivi.includes('revue_fin_stage')); doc.text('Revue en fin de stage', 20, y); y += 6;
+    _pdfCase(doc, 14, y, suivi.includes('orientation_rattrapage')); doc.text('Orientation vers un rattrapage ultérieur si nécessaire', 20, y); y += 10;
   }
 
-  y = Math.max(y, 220);
-  _pdfBlocSignature(doc, 14, y, 85, 'Signature du stagiaire', e.signature_stagiaire, `${s.prenom} ${s.nom}`);
-  _pdfBlocSignature(doc, 110, y, 85, 'Signature du RP', e.signature_rp, `${e.rp_nom || ''} — signé le ${e.signe_le ? e.signe_le.slice(0, 10) : ''}`);
+  y = Math.max(y, 240);
+  _pdfBlocSignature(doc, 14, y, 85, 'Responsable pédagogique', e.signature_rp, `${e.rp_nom || ''}${e.signe_le ? ' — signé le ' + e.signe_le.slice(0, 10) : ''}`);
+  _pdfBlocSignature(doc, 110, y, 85, 'Stagiaire', e.signature_stagiaire, `${s.prenom} ${s.nom}`);
 
-  _pdfPiedDePage(doc);
+  doc.setFontSize(8);
+  doc.setTextColor(120, 120, 120);
+  doc.text('SDIS 29 – Service Départemental d\'Incendie et de Secours du Finistère', 105, 287, { align: 'center' });
   doc.save(`${titre.replace(/\s+/g, '_')}_${s.nom}_${s.prenom}.pdf`.replace(/'/g, ''));
   toast(titre + ' générée');
 }

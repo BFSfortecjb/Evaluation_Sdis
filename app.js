@@ -2219,6 +2219,72 @@ function ongletEntretiens() {
     </div>`;
 }
 
+// Champs structurés propres à chaque livrable (modèles SDIS29 fournis) : la « Fiche de suivi et
+// de résolution » (difficultés/mesures/engagements/suivi) et la « Fiche de motivation
+// d'ajournement » (compétences évaluées A/ECA/NA + suites à donner) n'ont pas les mêmes champs,
+// stockés à part dans entretiens_individuels.decision_donnees (jsonb) — le texte libre
+// (decision_detail) reste le constat/motif en tête de fiche, commun aux deux modèles.
+function _champsDecisionEntretien(decision, donnees, verrouille) {
+  const d = donnees || {};
+  const dis = verrouille ? 'disabled' : '';
+  if (decision === 'resolution') {
+    const diff = d.difficultes || [];
+    const mes = d.mesures || [];
+    const suivi = d.suivi || [];
+    return `
+      <label>Difficultés identifiées</label>
+      <label><input type="checkbox" id="en-diff-technique" ${dis} ${diff.includes('technique') ? 'checked' : ''} style="width:auto"> Techniques (gestes, protocoles)</label>
+      <label><input type="checkbox" id="en-diff-organisationnelle" ${dis} ${diff.includes('organisationnelle') ? 'checked' : ''} style="width:auto"> Organisationnelles (méthode, matériel)</label>
+      <label><input type="checkbox" id="en-diff-comportementale" ${dis} ${diff.includes('comportementale') ? 'checked' : ''} style="width:auto"> Comportementales (attitude, intégration dans le collectif)</label>
+      <label><input type="checkbox" id="en-diff-autre-check" ${dis} ${d.difficultes_autre ? 'checked' : ''} style="width:auto"> Autres :</label>
+      <input id="en-diff-autre-texte" ${dis} value="${esc(d.difficultes_autre_texte || '')}">
+
+      <label>Mesures de résolution proposées</label>
+      <label><input type="checkbox" id="en-mesure-accompagnement" ${dis} ${mes.includes('accompagnement') ? 'checked' : ''} style="width:auto"> Accompagnement spécifique (formateur référent / APP ciblé)</label>
+      <label><input type="checkbox" id="en-mesure-travail-individuel" ${dis} ${mes.includes('travail_individuel') ? 'checked' : ''} style="width:auto"> Travail individuel (FOAD, référentiel, attitude…)</label>
+      <textarea id="en-mesures-detail" ${dis} placeholder="Détail des mesures">${esc(d.mesures_detail || '')}</textarea>
+
+      <label>Engagements du stagiaire</label>
+      <textarea id="en-engagements" ${dis}>${esc(d.engagements || '')}</textarea>
+
+      <label>Suivi / Évaluation de la mise en œuvre</label>
+      <label><input type="checkbox" id="en-suivi-revue" ${dis} ${suivi.includes('revue_fin_stage') ? 'checked' : ''} style="width:auto"> Revue en fin de stage</label>
+      <label><input type="checkbox" id="en-suivi-rattrapage" ${dis} ${suivi.includes('orientation_rattrapage') ? 'checked' : ''} style="width:auto"> Orientation vers un rattrapage ultérieur si nécessaire</label>`;
+  }
+  if (decision === 'ajournement') {
+    const comp = d.competences || {};
+    const suites = d.suites || [];
+    const competences = (S.formation && S.formation.competences) || [];
+    const lignesComp = competences.map(c => `
+      <tr><td>${esc(c.code)} – ${esc(c.libelle)}</td>
+        <td style="text-align:center"><input type="radio" name="en-comp-${c.id}" value="A" ${dis} ${comp[c.id] === 'A' ? 'checked' : ''}></td>
+        <td style="text-align:center"><input type="radio" name="en-comp-${c.id}" value="ECA" ${dis} ${comp[c.id] === 'ECA' ? 'checked' : ''}></td>
+        <td style="text-align:center"><input type="radio" name="en-comp-${c.id}" value="NA" ${dis} ${comp[c.id] === 'NA' ? 'checked' : ''}></td>
+      </tr>`).join('');
+    return `
+      <label>Compétences évaluées</label>
+      ${competences.length ? `
+      <div class="table-scroll"><table>
+        <tr><th>Compétence</th><th>Validée (A)</th><th>En cours (ECA)</th><th>Non acquise (NA)</th></tr>
+        ${lignesComp}
+      </table></div>` : `<div class="info">Aucune compétence définie pour cette formation.</div>`}
+
+      <label>Proposition de suites à donner</label>
+      <label><input type="checkbox" id="en-suite-rattrapage" ${dis} ${suites.includes('rattrapage_cible') ? 'checked' : ''} style="width:auto"> Rattrapage ciblé (APP / MSP complémentaires)</label>
+      <label>Nombre de jours à effectuer lors d'un prochain stage</label>
+      <input id="en-nb-jours-rattrapage" type="number" min="0" ${dis} value="${d.nb_jours_rattrapage ?? ''}">
+      <label><input type="checkbox" id="en-suite-repassage" ${dis} ${suites.includes('repassage_complet') ? 'checked' : ''} style="width:auto"> Repassage de la formation complète (1 semaine)</label>`;
+  }
+  return '';
+}
+
+function _onChangeDecisionEntretien() {
+  const val = $('en-decision').value;
+  $('en-decision-detail-ligne').style.display = val === 'normal' ? 'none' : '';
+  $('en-decision-detail-label').textContent = val === 'ajournement' ? "Motif(s) d'ajournement" : val === 'resolution' ? "Constat lors de l'entretien" : 'Motifs';
+  $('en-decision-champs').innerHTML = _champsDecisionEntretien(val, {}, false);
+}
+
 function formEntretien(stagiaireId, type) {
   const s = S.data.stagiaires.find(x => x.id === stagiaireId);
   if (!s) return;
@@ -2235,14 +2301,15 @@ function formEntretien(stagiaireId, type) {
       <label>Commentaire ${type === 'fin_stage' ? '(repris dans le Livret de certification du stagiaire)' : ''}</label>
       <textarea id="en-commentaire" ${verrouille ? 'disabled' : ''}>${e && e.commentaire ? esc(e.commentaire) : ''}</textarea>
       <label>Décision</label>
-      <select id="en-decision" ${verrouille ? 'disabled' : ''} onchange="$('en-decision-detail-ligne').style.display = this.value === 'normal' ? 'none' : ''">
+      <select id="en-decision" ${verrouille ? 'disabled' : ''} onchange="_onChangeDecisionEntretien()">
         <option value="normal" ${(!e || e.decision === 'normal') ? 'selected' : ''}>Normale (pas de suite particulière)</option>
         <option value="ajournement" ${e && e.decision === 'ajournement' ? 'selected' : ''}>Ajournement</option>
         <option value="resolution" ${e && e.decision === 'resolution' ? 'selected' : ''}>Résolution</option>
       </select>
-      <div class="ligne" id="en-decision-detail-ligne" style="display:${e && e.decision && e.decision !== 'normal' ? '' : 'none'}">
-        <div style="flex:1"><label>Motifs / mesures (ajournement ou résolution)</label>
-        <textarea id="en-decision-detail" ${verrouille ? 'disabled' : ''}>${e && e.decision_detail ? esc(e.decision_detail) : ''}</textarea></div>
+      <div id="en-decision-detail-ligne" style="display:${e && e.decision && e.decision !== 'normal' ? '' : 'none'}">
+        <label id="en-decision-detail-label">${e && e.decision === 'ajournement' ? "Motif(s) d'ajournement" : "Constat lors de l'entretien"}</label>
+        <textarea id="en-decision-detail" ${verrouille ? 'disabled' : ''}>${e && e.decision_detail ? esc(e.decision_detail) : ''}</textarea>
+        <div id="en-decision-champs">${_champsDecisionEntretien(e ? e.decision : 'normal', e ? e.decision_donnees : {}, verrouille)}</div>
       </div>
 
       <label>Signature du stagiaire</label>
@@ -2257,10 +2324,51 @@ function formEntretien(stagiaireId, type) {
            ${e.signe_le ? `<button class="btn secondaire" onclick="genererPDFEntretien(${stagiaireId}, '${type}')">📄 Voir le PDF</button>
            ${e.decision !== 'normal' ? `<button class="btn secondaire" onclick="genererPDFDecisionEntretien(${stagiaireId}, '${type}')">📄 ${e.decision === 'ajournement' ? "Fiche d'ajournement" : 'Fiche de résolution'}</button>` : ''}` : ''}`
         : `<button class="btn secondaire" onclick="enregistrerEntretien(${stagiaireId}, '${type}', false)">💾 Enregistrer (brouillon)</button>
-           <button class="btn" onclick="enregistrerEntretien(${stagiaireId}, '${type}', true)">✍️ Signer et verrouiller définitivement</button>`}
+           <button class="btn" onclick="enregistrerEntretien(${stagiaireId}, '${type}', true)">✍️ Signer et verrouiller définitivement</button>
+           ${e && e.decision !== 'normal' ? `<button class="btn secondaire" onclick="genererPDFDecisionEntretien(${stagiaireId}, '${type}')">📄 ${e.decision === 'ajournement' ? "Fiche d'ajournement" : 'Fiche de résolution'} (brouillon)</button>` : ''}`}
       <button class="btn secondaire" onclick="$('entretien-detail').innerHTML=''">Fermer</button>
     </div>`;
   if (!verrouille) _initSignatures(['en-sig-stag', 'en-sig-rp']);
+}
+
+function _lireDonneesDecisionEntretien(decision) {
+  if (decision === 'resolution') {
+    const difficultes = [];
+    if ($('en-diff-technique') && $('en-diff-technique').checked) difficultes.push('technique');
+    if ($('en-diff-organisationnelle') && $('en-diff-organisationnelle').checked) difficultes.push('organisationnelle');
+    if ($('en-diff-comportementale') && $('en-diff-comportementale').checked) difficultes.push('comportementale');
+    const mesures = [];
+    if ($('en-mesure-accompagnement') && $('en-mesure-accompagnement').checked) mesures.push('accompagnement');
+    if ($('en-mesure-travail-individuel') && $('en-mesure-travail-individuel').checked) mesures.push('travail_individuel');
+    const suivi = [];
+    if ($('en-suivi-revue') && $('en-suivi-revue').checked) suivi.push('revue_fin_stage');
+    if ($('en-suivi-rattrapage') && $('en-suivi-rattrapage').checked) suivi.push('orientation_rattrapage');
+    return {
+      difficultes,
+      difficultes_autre: !!($('en-diff-autre-check') && $('en-diff-autre-check').checked),
+      difficultes_autre_texte: $('en-diff-autre-texte') ? $('en-diff-autre-texte').value.trim() : '',
+      mesures,
+      mesures_detail: $('en-mesures-detail') ? $('en-mesures-detail').value.trim() : '',
+      engagements: $('en-engagements') ? $('en-engagements').value.trim() : '',
+      suivi,
+    };
+  }
+  if (decision === 'ajournement') {
+    const competences = {};
+    ((S.formation && S.formation.competences) || []).forEach(c => {
+      const el = document.querySelector('input[name="en-comp-' + c.id + '"]:checked');
+      if (el) competences[c.id] = el.value;
+    });
+    const suites = [];
+    if ($('en-suite-rattrapage') && $('en-suite-rattrapage').checked) suites.push('rattrapage_cible');
+    if ($('en-suite-repassage') && $('en-suite-repassage').checked) suites.push('repassage_complet');
+    return {
+      competences,
+      suites,
+      nb_jours_rattrapage: $('en-nb-jours-rattrapage') && $('en-nb-jours-rattrapage').value ? Number($('en-nb-jours-rattrapage').value) : null,
+    };
+  }
+  return {};
 }
 
 async function enregistrerEntretien(stagiaireId, type, signer) {
@@ -2273,6 +2381,7 @@ async function enregistrerEntretien(stagiaireId, type, signer) {
     commentaire: $('en-commentaire').value.trim() || null,
     decision,
     decision_detail: decision !== 'normal' ? ($('en-decision-detail').value.trim() || null) : null,
+    decision_donnees: decision !== 'normal' ? _lireDonneesDecisionEntretien(decision) : {},
   };
   if (signer) {
     const sigStag = _lireSignature('en-sig-stag');
