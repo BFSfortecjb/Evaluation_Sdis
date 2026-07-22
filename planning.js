@@ -248,9 +248,9 @@ function _rendreOngletPlanning() {
             <div class="actions-bloc">
               ${i > 0 ? `<span onclick="deplacerBlocPlanning(${b.id}, -1)" title="Monter">▲</span>` : ''}
               ${i < blocs.length - 1 ? `<span onclick="deplacerBlocPlanning(${b.id}, 1)" title="Descendre">▼</span>` : ''}
-              <span onclick="formBlocPlanning(${b.id})">${b.modele_id ? 'Annoter' : 'Modifier'}</span>
-              ${!b.modele_id ? `<span onclick="dupliquerBlocPlanning(${b.id})" title="Dupliquer ce bloc">⧉ Dupliquer</span>` : ''}
-              <span onclick="supprimerBlocPlanning(${b.id})">Supprimer</span>
+              <span onclick="formBlocPlanning(${b.id})" title="${b.modele_id ? 'Annoter' : 'Modifier'}">${b.modele_id ? '🗒️' : '✏️'}</span>
+              ${!b.modele_id ? `<span onclick="dupliquerBlocPlanning(${b.id})" title="Dupliquer ce bloc">⧉</span>` : ''}
+              <span onclick="supprimerBlocPlanning(${b.id})" title="Supprimer">🗑️</span>
             </div>`}
           </div>`).join('')}
         ${lectureSeule ? '' : `<button class="btn-ajout-bloc" onclick="formBlocPlanning(null, '${j}', '${demiId}')">+ Ajouter</button>`}
