@@ -74,7 +74,8 @@ const CIS_29 = ['AUDIERNE', 'BANNALEC', 'BREST', 'BRIEC', 'CAMARET-SUR-MER', 'CA
   'LESNEVEN', 'MOELAN-SUR-MER', 'MORLAIX', 'PLABENNEC', 'PLEYBEN', 'PLEYBER-CHRIST', 'PLONEOUR-LANVERN',
   'PLOUDALMEZEAU', 'PLOUESCAT', 'PLOUGASNOU', 'PLOUGASTEL-DAOULAS', 'PLOUGUERNEAU', 'PLOUIGNEAU',
   'PLOZEVET', 'PONT-AVEN', 'PONT-CROIX', 'PONT-L\'ABBE', 'QUERRIEN', 'QUIMPER', 'QUIMPERLE', 'ROSCOFF',
-  'ROSPORDEN', 'SAINT-POL-DE-LEON', 'SAINT-RENAN', 'SCAER', 'SIZUN'].map(c => 'CIS ' + c);
+  'ROSPORDEN', 'SAINT-POL-DE-LEON', 'SAINT-RENAN', 'SCAER', 'SIZUN'].map(c => 'CIS ' + c)
+  .concat(['SSSM']); // Service de Santé et de Secours Médical — traité comme un centre dans cette liste (rattachement des personnels)
 
 function selectCIS(id, valeur) {
   return `<select id="${id}"><option value="">— CIS —</option>
@@ -1327,7 +1328,24 @@ async function ongletFormateurs() {
         </div>
         <button class="btn" onclick="ajouterFormateur()">Inscrire</button>`
       : `<p class="info">Personne de qualifié${domComp ? ' en ' + esc(domComp) : ''} et disponible dans la liste d'aptitude (menu « Formateurs », vision GFor).</p>`}
+      ${gererJury ? `
+      <h3>Ajouter un membre du jury (hors liste d'aptitude)</h3>
+      <div class="info">Pour un membre du jury qui n'est pas formateur/RP dans l'appli (intervenant extérieur, médecin SSSM...). Ajouté directement comme membre du jury, sans qualification ni identité liée.</div>
+      <div class="ligne">
+        <div><label>Nom</label><input id="jury-ext-nom" placeholder="Nom Prénom"></div>
+        <div style="align-self:flex-end"><button class="btn petit" onclick="ajouterMembreJuryExterne()">➕ Ajouter au jury</button></div>
+      </div>` : ''}
     </div>`;
+}
+
+async function ajouterMembreJuryExterne() {
+  const nom = $('jury-ext-nom').value.trim();
+  if (!nom) return toast('Nom requis', false);
+  const { error } = await sb.from('session_formateurs').insert({
+    session_id: S.session.id, nom, aptitude_id: null, membre_jury: true,
+  });
+  if (error) return toast(error.message, false);
+  await chargerDonneesSession(S.session.id); ongletFormateurs(); toast('Membre du jury ajouté');
 }
 
 async function ajouterFormateur() {
@@ -2224,7 +2242,25 @@ function ongletEntretiens() {
 // d'ajournement » (compétences évaluées A/ECA/NA + suites à donner) n'ont pas les mêmes champs,
 // stockés à part dans entretiens_individuels.decision_donnees (jsonb) — le texte libre
 // (decision_detail) reste le constat/motif en tête de fiche, commun aux deux modèles.
-function _champsDecisionEntretien(decision, donnees, verrouille) {
+// Suggestion automatique A/ECA/NA pour une compétence, déduite du statut RIOFE déjà calculé dans
+// l'onglet Validation (bilanStagiaire + décision du jury compétence par compétence si elle existe) —
+// évite au RP de resaisir à la main ce qui est déjà tranché par ailleurs dans l'appli. Reste
+// modifiable manuellement sur la fiche (radio boutons), cette valeur n'est qu'une suggestion de
+// départ tant qu'aucun choix explicite n'a encore été enregistré.
+function _suggestionStatutCompetence(stagiaireId, competenceId) {
+  const s = S.data.stagiaires.find(x => x.id === stagiaireId);
+  if (!s || !S.formation || !S.formation.competences || !S.formation.competences.length) return null;
+  const { bilan } = bilanStagiaire(stagiaireId);
+  const b = bilan[competenceId];
+  if (!b) return null;
+  const statutFinal = _statutFinalCompetence(b.statut, s, competenceId);
+  if (statutFinal === 'Validé' || statutFinal === 'Validé (jury)') return 'A';
+  if (statutFinal === 'En cours' || statutFinal === 'Alerte NA') return 'ECA';
+  if (statutFinal === 'Non acquis' || statutFinal === 'Non validé (jury)') return 'NA';
+  return null;
+}
+
+function _champsDecisionEntretien(decision, donnees, verrouille, stagiaireId) {
   const d = donnees || {};
   const dis = verrouille ? 'disabled' : '';
   if (decision === 'resolution') {
@@ -2255,14 +2291,20 @@ function _champsDecisionEntretien(decision, donnees, verrouille) {
     const comp = d.competences || {};
     const suites = d.suites || [];
     const competences = (S.formation && S.formation.competences) || [];
-    const lignesComp = competences.map(c => `
+    const lignesComp = competences.map(c => {
+      // Priorité au choix déjà enregistré explicitement ; sinon suggestion automatique déduite du
+      // statut RIOFE de la compétence (onglet Validation), pour ne pas ressaisir ce qui est déjà su.
+      const valeur = comp[c.id] || _suggestionStatutCompetence(stagiaireId, c.id);
+      return `
       <tr><td>${esc(c.code)} – ${esc(c.libelle)}</td>
-        <td style="text-align:center"><input type="radio" name="en-comp-${c.id}" value="A" ${dis} ${comp[c.id] === 'A' ? 'checked' : ''}></td>
-        <td style="text-align:center"><input type="radio" name="en-comp-${c.id}" value="ECA" ${dis} ${comp[c.id] === 'ECA' ? 'checked' : ''}></td>
-        <td style="text-align:center"><input type="radio" name="en-comp-${c.id}" value="NA" ${dis} ${comp[c.id] === 'NA' ? 'checked' : ''}></td>
-      </tr>`).join('');
+        <td style="text-align:center"><input type="radio" name="en-comp-${c.id}" value="A" ${dis} ${valeur === 'A' ? 'checked' : ''}></td>
+        <td style="text-align:center"><input type="radio" name="en-comp-${c.id}" value="ECA" ${dis} ${valeur === 'ECA' ? 'checked' : ''}></td>
+        <td style="text-align:center"><input type="radio" name="en-comp-${c.id}" value="NA" ${dis} ${valeur === 'NA' ? 'checked' : ''}></td>
+      </tr>`;
+    }).join('');
     return `
       <label>Compétences évaluées</label>
+      <div class="info">Pré-rempli automatiquement d'après le statut actuel dans l'onglet Validation — modifiable au besoin.</div>
       ${competences.length ? `
       <div class="table-scroll"><table>
         <tr><th>Compétence</th><th>Validée (A)</th><th>En cours (ECA)</th><th>Non acquise (NA)</th></tr>
@@ -2278,11 +2320,11 @@ function _champsDecisionEntretien(decision, donnees, verrouille) {
   return '';
 }
 
-function _onChangeDecisionEntretien() {
+function _onChangeDecisionEntretien(stagiaireId) {
   const val = $('en-decision').value;
   $('en-decision-detail-ligne').style.display = val === 'normal' ? 'none' : '';
   $('en-decision-detail-label').textContent = val === 'ajournement' ? "Motif(s) d'ajournement" : val === 'resolution' ? "Constat lors de l'entretien" : 'Motifs';
-  $('en-decision-champs').innerHTML = _champsDecisionEntretien(val, {}, false);
+  $('en-decision-champs').innerHTML = _champsDecisionEntretien(val, {}, false, stagiaireId);
 }
 
 function formEntretien(stagiaireId, type) {
@@ -2301,7 +2343,7 @@ function formEntretien(stagiaireId, type) {
       <label>Commentaire ${type === 'fin_stage' ? '(repris dans le Livret de certification du stagiaire)' : ''}</label>
       <textarea id="en-commentaire" ${verrouille ? 'disabled' : ''}>${e && e.commentaire ? esc(e.commentaire) : ''}</textarea>
       <label>Décision</label>
-      <select id="en-decision" ${verrouille ? 'disabled' : ''} onchange="_onChangeDecisionEntretien()">
+      <select id="en-decision" ${verrouille ? 'disabled' : ''} onchange="_onChangeDecisionEntretien(${stagiaireId})">
         <option value="normal" ${(!e || e.decision === 'normal') ? 'selected' : ''}>Normale (pas de suite particulière)</option>
         <option value="ajournement" ${e && e.decision === 'ajournement' ? 'selected' : ''}>Ajournement</option>
         <option value="resolution" ${e && e.decision === 'resolution' ? 'selected' : ''}>Résolution</option>
@@ -2309,7 +2351,7 @@ function formEntretien(stagiaireId, type) {
       <div id="en-decision-detail-ligne" style="display:${e && e.decision && e.decision !== 'normal' ? '' : 'none'}">
         <label id="en-decision-detail-label">${e && e.decision === 'ajournement' ? "Motif(s) d'ajournement" : "Constat lors de l'entretien"}</label>
         <textarea id="en-decision-detail" ${verrouille ? 'disabled' : ''}>${e && e.decision_detail ? esc(e.decision_detail) : ''}</textarea>
-        <div id="en-decision-champs">${_champsDecisionEntretien(e ? e.decision : 'normal', e ? e.decision_donnees : {}, verrouille)}</div>
+        <div id="en-decision-champs">${_champsDecisionEntretien(e ? e.decision : 'normal', e ? e.decision_donnees : {}, verrouille, stagiaireId)}</div>
       </div>
 
       <label>Signature du stagiaire</label>
