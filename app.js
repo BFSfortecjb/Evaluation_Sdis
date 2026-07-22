@@ -704,7 +704,7 @@ async function creerSession() {
 // SESSION — chargement des données + onglets
 // ============================================================
 async function chargerDonneesSession(sessionId) {
-  const [stag, form, pass, equi, evals, autos, bilans, planning, entretiens] = await Promise.all([
+  const [stag, form, pass, equi, evals, autos, bilans, planning, entretiens, avisFin] = await Promise.all([
     sb.from('stagiaires').select('*').eq('session_id', sessionId).order('nom'),
     sb.from('session_formateurs').select('*').eq('session_id', sessionId).order('nom'),
     sb.from('passages').select('*').eq('session_id', sessionId).order('numero'),
@@ -714,12 +714,14 @@ async function chargerDonneesSession(sessionId) {
     sb.from('bilans_journaliers').select('*').eq('session_id', sessionId),
     sb.from('blocs_planning').select('*').eq('session_id', sessionId).order('ordre'),
     sb.from('entretiens_individuels').select('*').eq('session_id', sessionId),
+    sb.from('avis_fin_stage').select('*').eq('session_id', sessionId),
   ]);
-  for (const r of [stag, form, pass, equi, evals, autos, bilans, planning, entretiens]) if (r.error) throw r.error;
+  for (const r of [stag, form, pass, equi, evals, autos, bilans, planning, entretiens, avisFin]) if (r.error) throw r.error;
   S.data = {
     stagiaires: stag.data, formateurs: form.data, passages: pass.data,
     equipiers: equi.data, evaluations: evals.data, autoevaluations: autos.data,
     bilansJournaliers: bilans.data, blocsPlanning: planning.data, entretiens: entretiens.data,
+    avisFinStage: avisFin.data,
   };
 
   // Marque directement chaque formateur ISP (qualification role='isp') sur S.data.formateurs, pour
@@ -784,15 +786,20 @@ async function ouvrirSession(sessionId) {
     ? [
         ['stagiaires', 'Stagiaires'], ['formateurs', 'Formateurs'],
         ['evaluations', 'Évaluations'], ['msp', 'Suivi MSP'], ['comparatif', 'Comparatif'],
-        ['bilanjour', 'Bilan journalier'], ['planning', 'Chronogramme'],
+        ['bilanjour', 'Bilan journalier'], ['planning', 'Chronogramme'], ['avis', 'Mon avis de fin de stage'],
       ]
     : [
         ['stagiaires', 'Stagiaires'], ['formateurs', 'Formateurs'], ['garde', 'Feuille de garde'],
         ['evaluations', 'Évaluations'], ['msp', 'Suivi MSP'], ['validation', 'Validation'], ['comparatif', 'Comparatif'],
-        ['bilanjour', 'Bilan journalier'], ['planning', 'Chronogramme'],
+        ['bilanjour', 'Bilan journalier'], ['planning', 'Chronogramme'], ['avis', 'Mon avis de fin de stage'],
       ];
-  // Réglages du stage, entretiens individuels et PV de stage : réservés au RP et au GFor
-  if (S.vision === 'rp' || S.vision === 'gfor') { onglets.push(['entretiens', 'Entretiens individuels']); onglets.push(['parametres', 'Paramètres']); }
+  // Réglages du stage, entretiens individuels, PV de stage et compte rendu de fin de stage :
+  // réservés au RP et au GFor
+  if (S.vision === 'rp' || S.vision === 'gfor') {
+    onglets.push(['entretiens', 'Entretiens individuels']);
+    onglets.push(['compterendu', 'Compte rendu de fin de stage']);
+    onglets.push(['parametres', 'Paramètres']);
+  }
   $('session-onglets').innerHTML = onglets.map(([id, lbl]) =>
     `<button id="ong-${id}" onclick="ongletSession('${id}')">${lbl}</button>`).join('');
   show('ecran-session');
@@ -807,7 +814,8 @@ function ongletSession(id) {
   if (bouton) bouton.classList.add('actif');
   ({ stagiaires: ongletStagiaires, formateurs: ongletFormateurs, garde: ongletGarde,
      evaluations: ongletEvaluations, msp: ongletSuiviMSP, validation: ongletValidation, comparatif: ongletComparatif,
-     bilanjour: ongletBilanJournalier, planning: ongletPlanning, entretiens: ongletEntretiens, parametres: ongletParametresStage }[id])();
+     bilanjour: ongletBilanJournalier, planning: ongletPlanning, entretiens: ongletEntretiens,
+     avis: ongletAvisFinStage, compterendu: ongletCompteRenduFinStage, parametres: ongletParametresStage }[id])();
 }
 
 // ---------- Onglet Stagiaires ----------
@@ -2009,9 +2017,10 @@ function ongletParametresStage() {
       ${S.formation && S.formation.necessite_isp ? `
       <label>Présence ISP</label>
       <div class="info">Cette formation nécessite l'intervention d'un ISP. Le jour de présence réel dépend de sa disponibilité : il se règle dans l'onglet « Formateurs » (inscrire la personne qualifiée ISP puis préciser ses jours de présence), pas ici. ${(typeof joursPresenceISP === 'function' && joursPresenceISP().size) ? '✅ ISP présent le ' + Array.from(joursPresenceISP()).join(', ') + '.' : '⚠️ Aucun ISP inscrit pour l\'instant dans l\'équipe pédagogique.'}</div>` : ''}
+      <label><input type="checkbox" id="pr-entretiens-obligatoires" style="width:auto" ${sess.entretiens_obligatoires !== false ? 'checked' : ''} ${S.vision === 'gfor' ? '' : 'disabled'}> Entretiens individuels obligatoires avant de pouvoir générer le PV de stage</label>
+      <div class="info">${S.vision === 'gfor' ? 'Réglable uniquement par le GFor.' : 'Réglage réservé au GFor.'} Le PV de stage se génère depuis le bas de l'onglet Validation.</div>
       <button class="btn" onclick="enregistrerParametresStage()">Enregistrer</button>
-    </div>` + _carteEtatPVStage();
-  if (!(sess.pv_genere_le)) _initSignatures(['pv-gfor-sig']);
+    </div>`;
 }
 
 // ---------- PV de stage (livrable 9, modèle SDIS29) ----------
@@ -2032,14 +2041,15 @@ function _etatJury() {
 
 function _carteEtatPVStage() {
   const sess = S.session;
+  const entretiensObligatoires = sess.entretiens_obligatoires !== false;
   const etatEnt = _etatEntretiens();
   const etatJury = _etatJury();
-  const peutGenerer = etatEnt.complet && etatJury.complet;
+  const peutGenerer = (!entretiensObligatoires || etatEnt.complet) && etatJury.complet;
   const verrouilleSignatureGfor = !!sess.pv_genere_le;
   return `
     <div class="carte">
       <h2>PV de stage</h2>
-      <div class="info">Le PV de stage (modèle SDIS29) ne peut être généré que lorsque tous les entretiens individuels sont signés et que tous les membres du jury (onglet Formateurs) ont signé.</div>
+      <div class="info">Le PV de stage (modèle SDIS29) ne peut être généré que lorsque${entretiensObligatoires ? ' tous les entretiens individuels sont signés et que' : ''} tous les membres du jury (onglet Formateurs) ont signé.${!entretiensObligatoires ? ' Les entretiens individuels ne sont pas obligatoires pour cette session (réglage GFor, onglet Paramètres).' : ''}</div>
       <p>Entretiens mi-parcours signés : <b>${etatEnt.miOk}/${etatEnt.total}</b><br>
          Entretiens fin de stage signés : <b>${etatEnt.finOk}/${etatEnt.total}</b><br>
          Signatures du jury : <b>${etatJury.signes}/${etatJury.total}</b></p>
@@ -2055,13 +2065,12 @@ function _carteEtatPVStage() {
 
       <h3>Identité des candidats (nécessaire pour le PV)</h3>
       <div class="table-scroll"><table>
-        <tr><th>Civilité</th><th>Nom Prénom</th><th>Date naissance</th><th>Lieu naissance</th><th>Dpt</th><th>Observations</th></tr>
+        <tr><th>Matricule</th><th>Civilité</th><th>Nom Prénom</th><th>CIS</th><th>Observations</th></tr>
         ${S.data.stagiaires.map(s => `<tr>
+          <td>${esc(s.matricule || '—')}</td>
           <td><select id="pv-civ-${s.id}"><option value="">—</option><option value="M" ${s.civilite === 'M' ? 'selected' : ''}>M</option><option value="Mme" ${s.civilite === 'Mme' ? 'selected' : ''}>Mme</option></select></td>
           <td>${esc(s.nom)} ${esc(s.prenom)}</td>
-          <td><input id="pv-dn-${s.id}" type="date" value="${s.date_naissance || ''}"></td>
-          <td><input id="pv-ln-${s.id}" value="${esc(s.lieu_naissance || '')}"></td>
-          <td><input id="pv-dep-${s.id}" style="width:50px" value="${esc(s.departement_naissance || '')}"></td>
+          <td>${esc(s.cis || '—')}</td>
           <td><input id="pv-obs-${s.id}" value="${esc(s.observations_pv || '')}" placeholder="absence, rattrapage..."></td>
         </tr>`).join('')}
       </table></div>
@@ -2081,9 +2090,6 @@ async function enregistrerIdentitesPV() {
   for (const s of S.data.stagiaires) {
     const payload = {
       civilite: $('pv-civ-' + s.id).value || null,
-      date_naissance: $('pv-dn-' + s.id).value || null,
-      lieu_naissance: $('pv-ln-' + s.id).value.trim() || null,
-      departement_naissance: $('pv-dep-' + s.id).value.trim() || null,
       observations_pv: $('pv-obs-' + s.id).value.trim() || null,
     };
     const { error } = await sb.from('stagiaires').update(payload).eq('id', s.id);
@@ -2108,7 +2114,7 @@ async function enregistrerInfosPV(generer) {
   const { error } = await sb.from('sessions').update(payload).eq('id', S.session.id);
   if (error) return toast(error.message, false);
   Object.assign(S.session, payload);
-  ongletParametresStage();
+  ongletValidation();
   if (generer) {
     await genererPVStage();
     toast('PV de stage généré');
@@ -2123,6 +2129,9 @@ async function enregistrerParametresStage() {
   const nbMspRaw = $('pr-nb-msp').value.trim();
   const nbMsp = nbMspRaw ? Number(nbMspRaw) : null;
   const payload = { seuil_na_jury: seuilNA, seuil_eca_jury: seuilECA, nb_msp_certification: nbMsp };
+  // Réglage réservé au GFor : la case existe (verrouillée) même pour un RP, on ne la sauvegarde
+  // que si elle est effectivement modifiable, pour ne jamais écraser la valeur par erreur.
+  if (S.vision === 'gfor') payload.entretiens_obligatoires = $('pr-entretiens-obligatoires').checked;
   const { error } = await sb.from('sessions').update(payload).eq('id', S.session.id);
   if (error) return toast(error.message, false);
   Object.assign(S.session, payload);
@@ -2359,12 +2368,12 @@ function formEntretien(stagiaireId, type) {
       <label>Signature du RP</label>
       ${_zoneSignature('en-sig-rp', e ? e.signature_rp : null, verrouille)}
 
-      ${!e
-        ? `<div class="info">Cet entretien n'a pas encore été réalisé.</div>`
-        : verrouille
-        ? `<div class="info">${e.signe_le ? 'Entretien signé le ' + esc(e.signe_le.slice(0, 10)) + ' par ' + esc(e.rp_nom || '') + '.' : 'Entretien non signé (brouillon), consultation seule.'}</div>
-           ${e.signe_le ? `<button class="btn secondaire" onclick="genererPDFEntretien(${stagiaireId}, '${type}')">📄 Voir le PDF</button>
-           ${e.decision !== 'normal' ? `<button class="btn secondaire" onclick="genererPDFDecisionEntretien(${stagiaireId}, '${type}')">📄 ${e.decision === 'ajournement' ? "Fiche d'ajournement" : 'Fiche de résolution'}</button>` : ''}` : ''}`
+      ${verrouille
+        ? (!e
+            ? `<div class="info">Cet entretien n'a pas encore été réalisé.</div>`
+            : `<div class="info">${e.signe_le ? 'Entretien signé le ' + esc(e.signe_le.slice(0, 10)) + ' par ' + esc(e.rp_nom || '') + '.' : 'Entretien non signé (brouillon), consultation seule.'}</div>
+               ${e.signe_le ? `<button class="btn secondaire" onclick="genererPDFEntretien(${stagiaireId}, '${type}')">📄 Voir le PDF</button>
+               ${e.decision !== 'normal' ? `<button class="btn secondaire" onclick="genererPDFDecisionEntretien(${stagiaireId}, '${type}')">📄 ${e.decision === 'ajournement' ? "Fiche d'ajournement" : 'Fiche de résolution'}</button>` : ''}` : ''}`)
         : `<button class="btn secondaire" onclick="enregistrerEntretien(${stagiaireId}, '${type}', false)">💾 Enregistrer (brouillon)</button>
            <button class="btn" onclick="enregistrerEntretien(${stagiaireId}, '${type}', true)">✍️ Signer et verrouiller définitivement</button>
            ${e && e.decision !== 'normal' ? `<button class="btn secondaire" onclick="genererPDFDecisionEntretien(${stagiaireId}, '${type}')">📄 ${e.decision === 'ajournement' ? "Fiche d'ajournement" : 'Fiche de résolution'} (brouillon)</button>` : ''}`}
@@ -2496,7 +2505,8 @@ function ongletValidation() {
         <tr><th>Stagiaire</th>${comps.map(c => `<th title="${esc(c.libelle)}">${esc(c.code)}</th>`).join('')}<th>Décision jury</th></tr>
         ${lignes}
       </table></div>
-    </div>`;
+    </div>` + _carteEtatPVStage();
+  if (!S.session.pv_genere_le) _initSignatures(['pv-gfor-sig']);
 }
 
 async function enregistrerDecisionJury(stagiaireId, valeur) {
@@ -2854,9 +2864,104 @@ async function ecranAccueilStagiaire() {
       <textarea id="bilan-propose"></textarea>
       <button class="btn" onclick="enregistrerBilanJournalierStagiaire()">Enregistrer mon bilan</button>
       <p class="info">Remarque du formateur pour ce jour : <span id="bilan-remarque-formateur">—</span></p>
-    </div>`;
+    </div>
+    ${_blocAvisFinStage(stagiaireId, null)}`;
   show('ecran-stagiaire');
   chargerBilanJourUI(joursFormation()[0]);
+}
+
+// ============================================================
+// AVIS DE FIN DE STAGE — un stagiaire OU un formateur/RP dépose un avis (note + commentaire libre)
+// une fois le stage terminé. Réutilisé côté stagiaire (ecranAccueilStagiaire) et côté
+// formateur/RP/GFor (ongletAvisFinStage) — un seul des deux id (stagiaireId/formateurId) renseigné.
+// ============================================================
+function _blocAvisFinStage(stagiaireId, formateurId) {
+  const avis = (S.data.avisFinStage || []).find(a =>
+    stagiaireId ? a.stagiaire_id === stagiaireId : a.formateur_id === formateurId);
+  return `<div class="carte">
+    <h2>Avis de fin de stage</h2>
+    <div class="info">Ton avis global sur le déroulement du stage — consulté par le RP dans son compte rendu de fin de stage.</div>
+    <label>Note globale</label>
+    <select id="avis-note">
+      <option value="">— Pas de note —</option>
+      ${[1, 2, 3, 4, 5].map(n => `<option value="${n}" ${avis && avis.note === n ? 'selected' : ''}>${'★'.repeat(n)}${'☆'.repeat(5 - n)} (${n}/5)</option>`).join('')}
+    </select>
+    <label>Commentaire</label>
+    <textarea id="avis-commentaire">${avis && avis.commentaire ? esc(avis.commentaire) : ''}</textarea>
+    <button class="btn" onclick="enregistrerAvisFinStage(${stagiaireId ?? 'null'}, ${formateurId ?? 'null'})">Enregistrer mon avis</button>
+    ${avis ? `<p class="info">Dernier enregistrement : ${esc((avis.updated_at || avis.created_at || '').slice(0, 10))}</p>` : ''}
+  </div>`;
+}
+
+async function enregistrerAvisFinStage(stagiaireId, formateurId) {
+  const noteRaw = $('avis-note').value;
+  const payload = {
+    session_id: S.session.id,
+    stagiaire_id: stagiaireId || null,
+    formateur_id: formateurId || null,
+    note: noteRaw ? Number(noteRaw) : null,
+    commentaire: $('avis-commentaire').value.trim() || null,
+    updated_at: new Date().toISOString(),
+  };
+  const onConflict = stagiaireId ? 'session_id,stagiaire_id' : 'session_id,formateur_id';
+  const { error } = await sb.from('avis_fin_stage').upsert(payload, { onConflict });
+  if (error) return toast(error.message, false);
+  await chargerDonneesSession(S.session.id);
+  toast('Avis enregistré');
+  if (stagiaireId) ecranAccueilStagiaire(); else ongletAvisFinStage();
+}
+
+// Onglet « Mon avis de fin de stage » (formateur/RP/GFor) : retrouve la fiche session_formateurs
+// de la personne connectée via son nom (même logique que le filtrage RP/formateur par session,
+// voir S.user.nom ailleurs dans le fichier) et lui permet de déposer son propre avis.
+function ongletAvisFinStage() {
+  const moi = S.user ? S.data.formateurs.find(f => f.nom === S.user.nom) : null;
+  if (!moi) {
+    $('session-contenu').innerHTML = `<div class="carte"><p class="info">Tu n'es pas inscrit comme membre de l'équipe pédagogique de cette session — impossible de déposer un avis. Si c'est une erreur, demande au RP de t'inscrire dans l'onglet Formateurs.</p></div>`;
+    return;
+  }
+  $('session-contenu').innerHTML = _blocAvisFinStage(null, moi.id);
+}
+
+// Onglet « Compte rendu de fin de stage » (réservé RP/GFor) : consultation de tous les avis
+// stagiaires/formateurs déposés, et rédaction de la conclusion du RP sur le déroulement du stage.
+function ongletCompteRenduFinStage() {
+  if (!(S.vision === 'rp' || S.vision === 'gfor')) {
+    $('session-contenu').innerHTML = '<div class="carte"><p class="info">Réservé au responsable pédagogique et au GFor.</p></div>';
+    return;
+  }
+  const etoiles = n => n ? '★'.repeat(n) + '☆'.repeat(5 - n) : '—';
+  const lignesStag = S.data.stagiaires.map(s => {
+    const a = (S.data.avisFinStage || []).find(x => x.stagiaire_id === s.id);
+    return `<tr><td>${esc(s.prenom)} ${esc(s.nom)}</td><td>${etoiles(a && a.note)}</td><td>${a && a.commentaire ? esc(a.commentaire) : '<span class="info">Pas d\'avis déposé</span>'}</td></tr>`;
+  }).join('');
+  const lignesForm = S.data.formateurs.map(f => {
+    const a = (S.data.avisFinStage || []).find(x => x.formateur_id === f.id);
+    return `<tr><td>${esc(f.nom)}</td><td>${etoiles(a && a.note)}</td><td>${a && a.commentaire ? esc(a.commentaire) : '<span class="info">Pas d\'avis déposé</span>'}</td></tr>`;
+  }).join('');
+
+  $('session-contenu').innerHTML = `
+    <div class="carte">
+      <h2>Compte rendu de fin de stage</h2>
+      <div class="info">Avis des stagiaires et de l'équipe pédagogique sur le déroulement du stage, à consulter avant de rédiger ta conclusion.</div>
+      <h3>Avis des stagiaires</h3>
+      <div class="table-scroll"><table><tr><th>Stagiaire</th><th>Note</th><th>Commentaire</th></tr>${lignesStag}</table></div>
+      <h3 style="margin-top:16px">Avis de l'équipe pédagogique</h3>
+      <div class="table-scroll"><table><tr><th>Nom</th><th>Note</th><th>Commentaire</th></tr>${lignesForm}</table></div>
+      <h3 style="margin-top:16px">Conclusion du RP</h3>
+      <textarea id="cr-conclusion" style="min-height:120px">${S.session.conclusion_rp ? esc(S.session.conclusion_rp) : ''}</textarea>
+      <button class="btn" onclick="enregistrerConclusionRP()">Enregistrer la conclusion</button>
+      ${S.session.conclusion_rp_le ? `<p class="info">Dernier enregistrement : ${esc(S.session.conclusion_rp_le.slice(0, 10))}</p>` : ''}
+    </div>`;
+}
+
+async function enregistrerConclusionRP() {
+  const payload = { conclusion_rp: $('cr-conclusion').value.trim() || null, conclusion_rp_le: new Date().toISOString() };
+  const { error } = await sb.from('sessions').update(payload).eq('id', S.session.id);
+  if (error) return toast(error.message, false);
+  Object.assign(S.session, payload);
+  toast('Conclusion enregistrée');
+  ongletCompteRenduFinStage();
 }
 
 // Recharge les 3 champs du bilan du stagiaire (+ la remarque formateur en lecture seule) pour

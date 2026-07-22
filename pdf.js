@@ -968,12 +968,11 @@ async function genererPVStage() {
   // ---------- Liste des candidats ----------
   const lignesCandidats = S.data.stagiaires.map(s => {
     const avis = s.decision_jury === 'valide' ? 'APTE' : s.decision_jury === 'non_valide' ? 'INAPTE' : '—';
-    const naissance = (s.lieu_naissance || '—') + (s.departement_naissance ? ' (' + s.departement_naissance + ')' : '');
-    return [s.civilite || '—', `${s.nom} ${s.prenom}`, s.date_naissance || '—', naissance, avis, s.observations_pv || '—'];
+    return [s.matricule || '—', s.civilite || '—', `${s.nom} ${s.prenom}`, s.cis || '—', avis, s.observations_pv || '—'];
   });
   doc.autoTable({
     startY: y,
-    head: [['Civilité', 'Nom Prénom', 'Date naissance', 'Lieu de naissance + Dpt', 'Avis équipe péda.', 'Observations']],
+    head: [['Matricule', 'Civilité', 'Nom Prénom', 'CIS', 'Avis équipe péda.', 'Observations']],
     body: lignesCandidats,
     styles: { fontSize: 8, cellPadding: 1.5 },
     headStyles: { fillColor: ROUGE_SDIS },
