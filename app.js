@@ -2085,7 +2085,8 @@ function _carteEtatPVStage() {
            <button class="btn" onclick="genererPVStage()">📄 Régénérer le PDF du PV</button>`
         : `<div style="margin-top:10px">
              <button class="btn" ${peutGenerer ? '' : 'disabled'} onclick="enregistrerInfosPV(true)">📄 Enregistrer et générer le PV de stage</button>
-             ${!peutGenerer ? '<div class="info" style="color:#c8102e">Il manque des entretiens ou des signatures du jury pour pouvoir générer le PV.</div>' : ''}
+             <button class="btn secondaire" onclick="genererPVStage()">👁️ Aperçu du PDF (sans enregistrer)</button>
+             ${!peutGenerer ? `<div class="info" style="color:#c8102e">Il manque des entretiens ou des signatures du jury pour générer officiellement le PV. L'aperçu reste disponible à tout moment, avec les données actuelles (même incomplètes).</div>` : ''}
            </div>`}
     </div>`;
 }
