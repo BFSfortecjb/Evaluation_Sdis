@@ -3084,7 +3084,7 @@ async function ecranParametresFormations() {
 
   const lignes = (formations || []).map(f => `<tr>
       <td><span class="badge" style="background:${esc(f.couleur)};color:#fff">${esc(f.domaine)}</span></td>
-      <td><b>${esc(f.libelle)}</b> <span class="info">(${esc(f.code)})</span>${f.actif ? '' : ' <span class="info">— inactive</span>'}</td>
+      <td><b>${esc(f.libelle)}</b> <span class="info">(${esc(f.code)})</span> <span class="info">${f.type_formation === 'initiale' ? 'FI' : 'FC'}</span>${f.actif ? '' : ' <span class="info">— inactive</span>'}</td>
       <td>${f.nb_jours}</td>
       <td>${f.nb_stagiaires_max}</td>
       <td>${f.nb_msp_min} (+${f.nb_msp_rattrapage} rattrap.)</td>
@@ -3150,6 +3150,13 @@ function ecranFormulaireFormation(id) {
       <div><label>Nombre de RP requis</label><input id="fm-nbrp" type="number" min="1" value="${f?.nb_rp_requis ?? 1}"></div>
       <div><label>Formation active</label><select id="fm-actif"><option value="true" ${f?.actif !== false ? 'selected' : ''}>Oui</option><option value="false" ${f?.actif === false ? 'selected' : ''}>Non</option></select></div>
     </div>
+    <div class="ligne">
+      <div><label>Type de formation</label><select id="fm-type-formation">
+        <option value="continue" ${(!f || f.type_formation !== 'initiale') ? 'selected' : ''}>Formation continue</option>
+        <option value="initiale" ${f?.type_formation === 'initiale' ? 'selected' : ''}>Formation initiale</option>
+      </select>
+      <div class="info">Détermine le libellé imprimé en en-tête du PV de stage (« PROCÈS VERBAL PAE FPSE Formation Continue » ou « ...Formation Initiale »).</div></div>
+    </div>
 
     <h3>Avis du jury — seuils par défaut</h3>
     <div class="info">Nombre de ECA ou de NA sur une même compétence à partir duquel la validation passe en « Avis du jury ». Valeur reprise à la création de chaque nouvelle session de cette formation (réglable ensuite session par session). Sans effet si le mode de validation ci-dessous est réglé sur « MSP complexe sans faute ».</div>
@@ -3208,6 +3215,7 @@ async function enregistrerFormation(id) {
     utilise_types_msp: $('fm-types-msp').checked,
     mode_validation: $('fm-types-msp').checked ? $('fm-mode-validation').value : 'standard',
     necessite_isp: $('fm-necessite-isp').checked,
+    type_formation: $('fm-type-formation').value,
   };
   const req = id ? sb.from('formations').update(payload).eq('id', id) : sb.from('formations').insert(payload);
   const { error } = await req;

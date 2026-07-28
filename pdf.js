@@ -944,7 +944,8 @@ async function genererPVStage() {
   doc.rect(0, y, largeur, 9, 'F');
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(13);
-  doc.text('PROCÈS VERBAL PAE FPSE Formation Continue', largeur / 2, y + 6, { align: 'center' });
+  const libTypeFormation = (S.formation && S.formation.type_formation === 'initiale') ? 'Formation Initiale' : 'Formation Continue';
+  doc.text(`PROCÈS VERBAL PAE FPSE ${libTypeFormation}`, largeur / 2, y + 6, { align: 'center' });
   y += 15;
   doc.setTextColor(30, 30, 30);
   doc.setFontSize(11);
