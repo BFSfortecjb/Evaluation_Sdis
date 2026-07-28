@@ -860,7 +860,7 @@ function ongletStagiaires() {
       <button class="btn" onclick="ajouterStagiaire()">Ajouter</button>
 
       <h3>Import Excel</h3>
-      <p class="info">Colonnes attendues : Nom, Prénom, Matricule, CIS.</p>
+      <p class="info">Colonnes attendues : Civilité, Nom, Prénom, Matricule, CIS. Utile pour charger directement une liste de convocation exportée d'un autre logiciel (ex. GEEF) : exporte la liste en Excel/CSV, réordonne au besoin les colonnes selon le modèle ci-dessous, puis importe.</p>
       <button class="btn secondaire" onclick="telechargerModeleStagiaires()">📄 Télécharger le modèle</button>
       <label style="margin-top:10px">Fichier à importer (.xlsx)</label>
       <input type="file" accept=".xlsx,.xls,.csv" onchange="importerStagiaires(this)">`}
@@ -869,9 +869,9 @@ function ongletStagiaires() {
 
 function telechargerModeleStagiaires() {
   const ws = XLSX.utils.aoa_to_sheet([
-    ['Nom', 'Prénom', 'Matricule', 'CIS'],
-    ['BERNARD', 'Esteban', 'V0911111', 'CIS BANNALEC'],
-    ['JORAND', 'Romane', 'V0922222', 'CIS QUIMPERLE'],
+    ['Civilité', 'Nom', 'Prénom', 'Matricule', 'CIS'],
+    ['M', 'BERNARD', 'Esteban', 'V0911111', 'CIS BANNALEC'],
+    ['Mme', 'JORAND', 'Romane', 'V0922222', 'CIS QUIMPERLE'],
   ]);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Stagiaires');
@@ -897,6 +897,10 @@ function importerStagiaires(input) {
           else if (c.startsWith('pren')) o.prenom = String(l[k]).trim();
           else if (c.startsWith('matri')) o.matricule = String(l[k]).trim();
           else if (c.startsWith('cis')) o.cis = String(l[k]).trim();
+          else if (c.startsWith('civil')) {
+            const v = norm(l[k]);
+            o.civilite = v.startsWith('mme') || v.startsWith('mde') ? 'Mme' : v.startsWith('m') ? 'M' : null;
+          }
         }
         // pas de doublon : on ignore les stagiaires déjà présents dans la session
         if (o.nom && o.prenom && !S.data.stagiaires.some(s =>

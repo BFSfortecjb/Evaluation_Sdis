@@ -1,6 +1,7 @@
 // pdf.js — LES DOCUMENTS GÉNÉRÉS.
-// Livrés : fiche individuelle de suivi (livrables 1/5), livret de certification (livrables 2/3).
-// À suivre : chevalet (livrable 8), fiche de résolution (6), fiche d'ajournement (7).
+// Livrés : fiche individuelle de suivi (livrables 1/5), livret de certification (livrables 2/3),
+// fiche de suivi et de résolution (6), fiche de motivation d'ajournement (7), chevalet de
+// formation (8), PV de stage (9). Les 9 livrables prévus au projet sont couverts.
 // Ce fichier évoluera souvent — une erreur ici ne casse jamais la connexion ni la saisie.
 // Dépend de : jsPDF + jspdf-autotable (chargés dans index.html), S, S.data, bilanStagiaire() (app.js).
 
