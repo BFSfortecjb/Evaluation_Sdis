@@ -923,12 +923,12 @@ async function genererPDFDecisionEntretien(stagiaireId, type) {
 // faits (vérifié côté app.js avant l'appel). Reprend le modèle papier fourni : en-tête SDIS29,
 // tableau des candidats (civilité/identité/avis/observations), compteurs, tableau de l'équipe
 // pédagogique (jury) avec présence partielle et signature.
-async function genererPVStage() {
-  if (!window.jspdf) return toast('Bibliothèque PDF non chargée', false);
-  const sess = S.session;
-  if (!sess) return toast('Session introuvable', false);
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF();
+// Dessine une page de PV de stage sur un doc jsPDF déjà créé (et déjà positionné sur la bonne
+// page via doc.addPage() si besoin, fait par l'appelant) : n'appelle ni _pdfPiedDePage ni
+// doc.save, pour pouvoir être réutilisée telle quelle en génération groupée (une page par
+// session) — voir telechargerPVFMPACIS / exporterPVFMPAMasse, qui enchaînent plusieurs sessions
+// dans un même document.
+function _dessinerPagePVStage(doc, sess, formation, stagiaires, jury, aptMap) {
   const largeur = doc.internal.pageSize.getWidth();
 
   let y = 12;
@@ -944,7 +944,7 @@ async function genererPVStage() {
   doc.rect(0, y, largeur, 9, 'F');
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(13);
-  const libTypeFormation = (S.formation && S.formation.type_formation === 'initiale') ? 'Formation Initiale' : 'Formation Continue';
+  const libTypeFormation = (formation && formation.type_formation === 'initiale') ? 'Formation Initiale' : 'Formation Continue';
   doc.text(`PROCÈS VERBAL PAE FPSE ${libTypeFormation}`, largeur / 2, y + 6, { align: 'center' });
   y += 15;
   doc.setTextColor(30, 30, 30);
@@ -968,7 +968,7 @@ async function genererPVStage() {
   y += 10;
 
   // ---------- Liste des candidats ----------
-  const lignesCandidats = S.data.stagiaires.map(s => {
+  const lignesCandidats = stagiaires.map(s => {
     const avis = s.decision_jury === 'valide' ? 'APTE' : s.decision_jury === 'non_valide' ? 'INAPTE' : '—';
     return [s.matricule || '—', s.civilite || '—', `${s.nom} ${s.prenom}`, s.cis || '—', avis, s.observations_pv || '—'];
   });
@@ -982,8 +982,8 @@ async function genererPVStage() {
   });
   y = doc.lastAutoTable.finalY + 4;
 
-  const inscrits = S.data.stagiaires.length;
-  const admis = S.data.stagiaires.filter(s => s.decision_jury === 'valide').length;
+  const inscrits = stagiaires.length;
+  const admis = stagiaires.filter(s => s.decision_jury === 'valide').length;
   doc.setFontSize(9);
   doc.text(`INSCRITS : ${inscrits}`, 14, y);
   doc.text(`PRÉSENTS (du 1er au dernier jour) : ${inscrits}`, 80, y);
@@ -991,15 +991,8 @@ async function genererPVStage() {
   y += 10;
 
   // ---------- Membres de l'équipe pédagogique (jury) ----------
-  const jury = S.data.formateurs.filter(f => f.membre_jury);
-  const nbJours = (S.formation && S.formation.nb_jours) || 5;
-  const domComp = S.formation ? S.formation.domaine_competence : null;
-  const aptiIds = jury.map(f => f.aptitude_id).filter(Boolean);
-  let aptMap = {};
-  if (aptiIds.length) {
-    const { data: apt } = await sb.from('aptitudes').select('*, qualifications(*)').in('id', aptiIds);
-    (apt || []).forEach(a => { aptMap[a.id] = a; });
-  }
+  const nbJours = (formation && formation.nb_jours) || 5;
+  const domComp = formation ? formation.domaine_competence : null;
   const lignesJury = jury.map(f => {
     const a = f.aptitude_id ? aptMap[f.aptitude_id] : null;
     const qual = a ? ((a.qualifications || []).find(q => !domComp || q.domaine === domComp) || (a.qualifications || [])[0]) : null;
@@ -1024,9 +1017,131 @@ async function genererPVStage() {
       }
     },
   });
+}
 
+// Récupère les fiches d'identité + qualifications des membres du jury (pour l'affichage de leur
+// rôle pédagogique sur le PV), à partir de leurs aptitude_id.
+async function _chargerAptMapJury(jury) {
+  const aptiIds = jury.map(f => f.aptitude_id).filter(Boolean);
+  let aptMap = {};
+  if (aptiIds.length) {
+    const { data: apt } = await sb.from('aptitudes').select('*, qualifications(*)').in('id', aptiIds);
+    (apt || []).forEach(a => { aptMap[a.id] = a; });
+  }
+  return aptMap;
+}
+
+// Reconstitue toutes les données nécessaires au PV d'une session donnée, indépendamment de la
+// session actuellement ouverte dans l'appli (S.session) — utilisé pour la génération groupée par
+// CIS/année (telechargerPVFMPACIS, exporterPVFMPAMasse), qui peut porter sur des sessions autres
+// que celle en cours.
+async function _donneesPVSession(sessionId) {
+  const { data: sess, error } = await sb.from('sessions').select('*, formations(*)').eq('id', sessionId).single();
+  if (error || !sess) return null;
+  const [stagRes, formRes] = await Promise.all([
+    sb.from('stagiaires').select('*').eq('session_id', sessionId),
+    sb.from('session_formateurs').select('*').eq('session_id', sessionId).eq('membre_jury', true),
+  ]);
+  const stagiaires = stagRes.data || [];
+  const jury = formRes.data || [];
+  const aptMap = await _chargerAptMapJury(jury);
+  return { sess, formation: sess.formations, stagiaires, jury, aptMap };
+}
+
+// ---------- PV de stage (livrable 9, modèle SDIS29) ----------
+// Généré uniquement quand tous les entretiens individuels et toutes les signatures du jury sont
+// faits (vérifié côté app.js avant l'appel). Reprend le modèle papier fourni : en-tête SDIS29,
+// tableau des candidats (civilité/identité/avis/observations), compteurs, tableau de l'équipe
+// pédagogique (jury) avec présence partielle et signature.
+async function genererPVStage() {
+  if (!window.jspdf) return toast('Bibliothèque PDF non chargée', false);
+  const sess = S.session;
+  if (!sess) return toast('Session introuvable', false);
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const jury = S.data.formateurs.filter(f => f.membre_jury);
+  const aptMap = await _chargerAptMapJury(jury);
+  _dessinerPagePVStage(doc, sess, S.formation, S.data.stagiaires, jury, aptMap);
   _pdfPiedDePage(doc);
   doc.save(`PV_stage_${(S.formation ? S.formation.code : 'stage')}_${sess.code_acces}.pdf`.replace(/\s+/g, '_'));
+}
+
+// ---------- Suivi FMPA : PV groupés par CIS et export de masse (livrable dérivé du 9) ----------
+// Une session de formation continue (FMPA) suit exactement le même circuit qu'une session
+// classique (entretiens, jury, PV) — ces fonctions ne créent pas un nouveau modèle de document,
+// elles régénèrent à la volée le même PV de stage pour chaque session FMPA concernée, en les
+// enchaînant dans un même PDF (une page par session) plutôt qu'un téléchargement par session.
+async function telechargerPVFMPACIS(cis, annee) {
+  if (!window.jspdf) return toast('Bibliothèque PDF non chargée', false);
+  const debut = annee + '-01-01', fin = annee + '-12-31';
+  const { data: sessions, error } = await sb.from('sessions')
+    .select('id, lieu, date_debut, formations!inner(type_formation)')
+    .eq('formations.type_formation', 'continue').eq('lieu', cis)
+    .gte('date_debut', debut).lte('date_debut', fin).order('date_debut');
+  if (error) return toast(error.message, false);
+  if (!sessions || !sessions.length) return toast(`Aucune session FMPA trouvée pour ${cis} sur ${annee}`, false);
+
+  const doc = await _construireDocPVFMPA(sessions);
+  if (!doc) return toast('Aucune donnée exploitable pour ces sessions', false);
+  _pdfPiedDePage(doc);
+  doc.save(`PV_FMPA_${cis}_${annee}.pdf`.replace(/\s+/g, '_'));
+  toast(`PV FMPA de ${cis} téléchargé (${sessions.length} session(s))`);
+}
+
+// Construit un document jsPDF multi-pages (une page par session fournie), sans pied de page ni
+// sauvegarde — factorisé pour être réutilisé aussi bien pour un CIS unique que pour l'export de
+// masse tous CIS.
+async function _construireDocPVFMPA(sessions) {
+  if (!window.jspdf || !sessions.length) return null;
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  let premiere = true;
+  for (const s of sessions) {
+    const d = await _donneesPVSession(s.id);
+    if (!d) continue;
+    if (!premiere) doc.addPage();
+    premiere = false;
+    _dessinerPagePVStage(doc, d.sess, d.formation, d.stagiaires, d.jury, d.aptMap);
+  }
+  return premiere ? null : doc; // premiere encore vrai = aucune session n'a pu être chargée
+}
+
+// Export de fin d'année : un fichier PV par CIS (regroupant toutes ses sessions FMPA de l'année),
+// le tout dans un unique zip téléchargé en une fois.
+async function exporterPVFMPAMasse(annee) {
+  if (!window.jspdf) return toast('Bibliothèque PDF non chargée', false);
+  if (typeof JSZip === 'undefined') return toast('Bibliothèque zip non chargée', false);
+  const debut = annee + '-01-01', fin = annee + '-12-31';
+  const { data: sessions, error } = await sb.from('sessions')
+    .select('id, lieu, date_debut, formations!inner(type_formation)')
+    .eq('formations.type_formation', 'continue')
+    .gte('date_debut', debut).lte('date_debut', fin).order('date_debut');
+  if (error) return toast(error.message, false);
+  if (!sessions || !sessions.length) return toast(`Aucune session FMPA trouvée sur ${annee}`, false);
+
+  const parCIS = {};
+  for (const s of sessions) { const c = s.lieu || 'sans_lieu'; (parCIS[c] = parCIS[c] || []).push(s); }
+
+  toast(`Génération en cours pour ${Object.keys(parCIS).length} CIS...`);
+  const zip = new JSZip();
+  let nbFichiers = 0;
+  for (const cis of Object.keys(parCIS)) {
+    const doc = await _construireDocPVFMPA(parCIS[cis]);
+    if (!doc) continue;
+    _pdfPiedDePage(doc);
+    const blob = doc.output('blob');
+    zip.file(`PV_FMPA_${cis}_${annee}.pdf`.replace(/\s+/g, '_'), blob);
+    nbFichiers++;
+  }
+  if (!nbFichiers) return toast('Aucun PV généré', false);
+  const contenuZip = await zip.generateAsync({ type: 'blob' });
+  const url = URL.createObjectURL(contenuZip);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `PV_FMPA_${annee}_tous_CIS.zip`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  toast(`Export terminé : ${nbFichiers} CIS (${annee})`);
 }
 
 // ---------- Chevalet de formation (livrable 8) ----------

@@ -59,6 +59,8 @@ function majMenu(actif) {
     `<button class="${actif === 'apt' ? 'actif' : ''}" onclick="ecranGestionFormateurs()">👨‍🏫 Formateurs</button>` +
     (S.vision === 'gfor' ? `<button class="${actif === 'param-form' ? 'actif' : ''}" onclick="ecranParametresFormations()">⚙️ Paramètres formations</button>` : '') +
     ((S.vision === 'rp' || S.vision === 'gfor' || S.vision === 'chef_centre') ? `<button class="${actif === 'archives' ? 'actif' : ''}" onclick="ecranArchives()">🗂️ Archives entretiens & PV</button>` : '') +
+    ((S.vision === 'rp' || S.vision === 'gfor' || S.vision === 'chef_centre') ? `<button class="${actif === 'fmpa' ? 'actif' : ''}" onclick="ecranSuiviFMPA()">📊 Suivi FMPA</button>` : '') +
+    (S.vision === 'gfor' ? `<button class="${actif === 'effectifs' ? 'actif' : ''}" onclick="ecranEffectifsCIS()">👥 Effectifs CIS</button>` : '') +
     `<button class="${actif === 'parcours' ? 'actif' : ''}" onclick="ecranMonParcoursStagiaire()">📖 Mon parcours stagiaire</button>`;
   m.style.display = '';
 }
@@ -3293,4 +3295,272 @@ async function supprCompetence(id) {
   toast('Compétence supprimée');
   if (formationId) ecranCompetencesFormation(formationId);
   else ecranParametresFormations();
+}
+
+// ============================================================
+// EFFECTIFS PAR CIS (GFor) — roster de référence, indépendant des sessions.
+// Sert de population de référence au tableau de bord « Suivi FMPA » : sans cette liste, l'appli
+// ne connaît que les personnes déjà passées par un stage (stagiaires) ou déjà qualifiées
+// (aptitudes), donc impossible de savoir qui n'a JAMAIS fait sa FMPA.
+// ============================================================
+let _filtreEffectifsCIS = '';
+
+async function ecranEffectifsCIS() {
+  majMenu('effectifs');
+  show('ecran-staff-accueil');
+  const { data, error } = await sb.from('agents').select('*').order('cis').order('nom');
+  if (error) return toast(error.message, false);
+  window._agents = data || [];
+  _rendreEffectifsCIS();
+}
+
+function _rendreEffectifsCIS() {
+  const agents = (window._agents || []).filter(a =>
+    !_filtreEffectifsCIS || a.cis === _filtreEffectifsCIS);
+  const parCIS = {};
+  for (const a of (window._agents || [])) (parCIS[a.cis || '— sans CIS —'] = parCIS[a.cis || '— sans CIS —'] || []).push(a);
+
+  const lignes = agents.map(a => `<tr>
+      <td>${esc(a.matricule || '—')}</td>
+      <td>${esc(a.nom)}</td><td>${esc(a.prenom)}</td>
+      <td>${esc(a.cis || '—')}</td>
+      <td>${esc(a.statut || '—')}</td>
+      <td>${a.actif ? '<span class="statut-valide">Actif</span>' : '<span class="info">Inactif</span>'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn petit secondaire" onclick="toggleActifAgent(${a.id}, ${!a.actif})">${a.actif ? '⏸️' : '▶️'}</button>
+        <button class="btn petit secondaire" onclick="supprAgent(${a.id})">✕</button>
+      </td>
+    </tr>`).join('');
+
+  $('staff-dashboard').innerHTML = `<div class="carte">
+    <h2>Effectifs par CIS (${(window._agents || []).length})</h2>
+    <div class="info">Roster de référence de tous les agents rattachés à chaque centre de secours, indépendant des stages/sessions. Sert de base au tableau de bord « Suivi FMPA » pour savoir qui a fait sa formation continue et qui ne l'a pas encore faite.</div>
+    <div class="ligne">
+      <div><label>Filtrer par CIS</label><select onchange="_filtreEffectifsCIS = this.value; _rendreEffectifsCIS()">
+        <option value="">Tous les CIS</option>
+        ${Object.keys(parCIS).sort().map(c => `<option value="${esc(c)}" ${_filtreEffectifsCIS === c ? 'selected' : ''}>${esc(c)} (${parCIS[c].length})</option>`).join('')}
+      </select></div>
+    </div>
+    <div class="table-scroll"><table>
+      <tr><th>Matricule</th><th>Nom</th><th>Prénom</th><th>CIS</th><th>Statut</th><th>État</th><th></th></tr>
+      ${lignes || `<tr><td colspan="7"><span class="info">Aucun agent enregistré pour l'instant — utilise l'import Excel ci-dessous.</span></td></tr>`}
+    </table></div>
+
+    <h3>Ajouter un agent</h3>
+    <div class="ligne">
+      <div><label>Nom</label><input id="ag-nom"></div>
+      <div><label>Prénom</label><input id="ag-prenom"></div>
+    </div>
+    <div class="ligne">
+      <div><label>Matricule</label><input id="ag-mat"></div>
+      <div><label>CIS de rattachement</label>${selectCIS('ag-cis')}</div>
+      <div><label>Statut</label><select id="ag-statut"><option value="">—</option>${STATUTS.map(s => `<option value="${s}">${s}</option>`).join('')}</select></div>
+    </div>
+    <button class="btn" onclick="ajouterAgent()">Ajouter</button>
+
+    <h3>Import Excel</h3>
+    <p class="info">Colonnes attendues : Matricule, Nom, Prénom, CIS, Statut. Utile pour charger d'un coup l'effectif complet d'un ou plusieurs centres (export d'un logiciel RH type GEEF).</p>
+    <button class="btn secondaire" onclick="telechargerModeleAgents()">📄 Télécharger le modèle</button>
+    <label style="margin-top:10px">Fichier à importer (.xlsx)</label>
+    <input type="file" accept=".xlsx,.xls,.csv" onchange="importerAgents(this)">
+  </div>`;
+}
+
+async function ajouterAgent() {
+  const nom = $('ag-nom').value.trim(), prenom = $('ag-prenom').value.trim();
+  if (!nom || !prenom) return toast('Nom et prénom requis', false);
+  const payload = {
+    nom, prenom,
+    matricule: $('ag-mat').value.trim() || null,
+    cis: $('ag-cis').value || null,
+    statut: $('ag-statut').value || null,
+  };
+  const { error } = await sb.from('agents').insert(payload);
+  if (error) return toast(error.message, false);
+  toast('Agent ajouté');
+  ecranEffectifsCIS();
+}
+
+async function toggleActifAgent(id, actif) {
+  const { error } = await sb.from('agents').update({ actif }).eq('id', id);
+  if (error) return toast(error.message, false);
+  const a = (window._agents || []).find(x => x.id === id);
+  if (a) a.actif = actif;
+  _rendreEffectifsCIS();
+}
+
+async function supprAgent(id) {
+  if (!confirm('Supprimer cet agent du roster ?')) return;
+  const { error } = await sb.from('agents').delete().eq('id', id);
+  if (error) return toast(error.message, false);
+  toast('Agent supprimé');
+  ecranEffectifsCIS();
+}
+
+function telechargerModeleAgents() {
+  const ws = XLSX.utils.aoa_to_sheet([
+    ['Matricule', 'Nom', 'Prénom', 'CIS', 'Statut'],
+    ['V0911111', 'BERNARD', 'Esteban', 'CIS BANNALEC', 'SPV'],
+    ['V0922222', 'JORAND', 'Romane', 'CIS QUIMPERLE', 'SPP'],
+  ]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Effectifs');
+  XLSX.writeFile(wb, 'modele_effectifs_cis.xlsx');
+}
+
+function importerAgents(input) {
+  const fichier = input.files[0];
+  if (!fichier) return;
+  const lecteur = new FileReader();
+  lecteur.onload = async e => {
+    try {
+      const wb = XLSX.read(e.target.result, { type: 'array' });
+      const lignes = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+      const norm = t => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      const existants = window._agents || [];
+      const rows = [];
+      for (const l of lignes) {
+        const o = { actif: true };
+        for (const k of Object.keys(l)) {
+          const c = norm(k);
+          if (c.startsWith('nom')) o.nom = String(l[k]).trim();
+          else if (c.startsWith('pren')) o.prenom = String(l[k]).trim();
+          else if (c.startsWith('matri')) o.matricule = String(l[k]).trim();
+          else if (c.startsWith('cis')) o.cis = String(l[k]).trim();
+          else if (c.startsWith('stat')) {
+            const v = String(l[k]).trim().toUpperCase();
+            o.statut = STATUTS.includes(v) ? v : null;
+          }
+        }
+        if (o.nom && o.prenom && !existants.some(a =>
+          (o.matricule && a.matricule === o.matricule) || norm(a.nom + a.prenom) === norm(o.nom + o.prenom))) {
+          rows.push(o);
+        }
+      }
+      if (!rows.length) return toast('Aucune ligne exploitable ou agents déjà tous présents', false);
+      const { error } = await sb.from('agents').insert(rows);
+      if (error) return toast(error.message, false);
+      toast(rows.length + ' agent(s) importé(s)');
+      ecranEffectifsCIS();
+    } catch (err) { toast('Fichier illisible : ' + err.message, false); }
+  };
+  lecteur.readAsArrayBuffer(fichier);
+}
+
+// ============================================================
+// SUIVI FMPA PAR CIS (RP/GFor/Chef de centre) — tableau de bord annuel.
+// Un CIS est « commencé » dès qu'une session de formation continue (formations.type_formation =
+// 'continue') a été organisée cette année-là (sessions.lieu = CIS). Un agent du roster est compté
+// « fait » s'il apparaît comme stagiaire (via matricule, ou à défaut nom+prénom) d'une session de
+// formation continue de l'année sélectionnée, quel que soit le CIS où cette session a eu lieu.
+// ============================================================
+async function ecranSuiviFMPA() {
+  majMenu('fmpa');
+  show('ecran-staff-accueil');
+  window._fmpaAnnee = window._fmpaAnnee || new Date().getFullYear();
+  await _rendreSuiviFMPA();
+}
+
+function _idSafeCIS(c) {
+  return String(c).replace(/[^a-zA-Z0-9]/g, '_');
+}
+
+async function _rendreSuiviFMPA() {
+  const annee = window._fmpaAnnee;
+  const debut = annee + '-01-01', fin = annee + '-12-31';
+  const cisChefCentre = S.vision === 'chef_centre' ? (S.user && S.user.cis) : null;
+
+  const [ag, sess] = await Promise.all([
+    sb.from('agents').select('*').eq('actif', true),
+    sb.from('sessions').select('id, lieu, date_debut, formations!inner(type_formation)')
+      .eq('formations.type_formation', 'continue').gte('date_debut', debut).lte('date_debut', fin),
+  ]);
+  if (ag.error) return toast(ag.error.message, false);
+  if (sess.error) return toast(sess.error.message, false);
+  const agents = ag.data || [];
+  const sessionsFMPA = sess.data || [];
+  const sessionIds = sessionsFMPA.map(s => s.id);
+
+  let stagiaires = [];
+  if (sessionIds.length) {
+    const { data, error } = await sb.from('stagiaires').select('id, session_id, nom, prenom, matricule').in('session_id', sessionIds);
+    if (error) return toast(error.message, false);
+    stagiaires = data || [];
+  }
+
+  const norm = t => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+  const matriculesFaits = new Set(stagiaires.filter(s => s.matricule).map(s => norm(s.matricule)));
+  const nomsFaits = new Set(stagiaires.map(s => norm(s.nom + s.prenom)));
+  for (const a of agents) a._fait = (a.matricule && matriculesFaits.has(norm(a.matricule))) || nomsFaits.has(norm(a.nom + a.prenom));
+
+  const parCIS = {};
+  for (const a of agents) (parCIS[a.cis || '— sans CIS —'] = parCIS[a.cis || '— sans CIS —'] || { agents: [], sessions: [] }).agents.push(a);
+  for (const s of sessionsFMPA) { const c = s.lieu || '— sans lieu —'; (parCIS[c] = parCIS[c] || { agents: [], sessions: [] }).sessions.push(s); }
+
+  let cisAffiches = Object.keys(parCIS).sort();
+  if (cisChefCentre) cisAffiches = cisAffiches.filter(c => c === cisChefCentre);
+
+  // Table de correspondance idSafe → nom réel du CIS : certains CIS contiennent une apostrophe
+  // (« CIS DE L'AVEN », « CIS PONT-L'ABBE ») qui casserait un onclick="...('nom')" même échappé en
+  // HTML (l'entité &#39; est redécodée par le navigateur avant l'exécution du JS). On passe donc
+  // toujours l'identifiant sûr dans le HTML et on ne retrouve le nom réel qu'au moment du clic.
+  window._fmpaCISParId = window._fmpaCISParId || {};
+  const lignes = cisAffiches.map(c => {
+    const g = parCIS[c];
+    const total = g.agents.length;
+    const fait = g.agents.filter(a => a._fait).length;
+    const pct = total ? Math.round(fait / total * 100) : 0;
+    const commencee = g.sessions.length > 0;
+    const idSafe = _idSafeCIS(c);
+    window._fmpaCISParId[idSafe] = c;
+    return `<tr>
+        <td><b>${esc(c)}</b></td>
+        <td>${commencee ? '<span class="statut-valide">✔ Commencée</span>' : '<span class="statut-na">— Pas commencée</span>'}<br><span class="info">${g.sessions.length} session(s) en ${annee}</span></td>
+        <td>${total ? `<b>${fait}/${total}</b> (${pct}%)` : '<span class="info">Aucun effectif renseigné pour ce CIS</span>'}
+          ${total ? `<div class="jauge"><div style="width:${pct}%;background:${pct === 100 ? 'var(--ok)' : 'var(--warn)'}"></div></div>` : ''}</td>
+        <td style="white-space:nowrap">
+          ${total ? `<button class="btn petit secondaire" onclick="_toggleDetailFMPA('${idSafe}')">👁️ Détail</button>` : ''}
+          <button class="btn petit secondaire" ${commencee ? '' : 'disabled'} onclick="_telechargerPVFMPAParId('${idSafe}', ${annee})">📄 PV du CIS</button>
+        </td>
+      </tr>
+      <tr id="fmpa-detail-${idSafe}" style="display:none"><td colspan="4">${_detailAgentsFMPA(g.agents)}</td></tr>`;
+  }).join('');
+
+  $('staff-dashboard').innerHTML = `<div class="carte">
+    <h2>Suivi FMPA par centre de secours</h2>
+    <div class="ligne">
+      <div><label>Année</label><input type="number" id="fmpa-annee" value="${annee}" style="width:100px" onchange="window._fmpaAnnee = Number(this.value) || ${new Date().getFullYear()}; _rendreSuiviFMPA()"></div>
+      ${cisChefCentre ? '' : `<div style="align-self:flex-end"><button class="btn secondaire" onclick="exporterPVFMPAMasse(${annee})">🗂️ Export de masse (tous les CIS, ${annee})</button></div>`}
+    </div>
+    <div class="info">Un CIS est considéré « commencé » dès qu'une session de formation continue (FMPA) y a été organisée sur l'année sélectionnée. L'effectif de référence vient de l'écran « Effectifs CIS » ; un agent est compté « fait » s'il apparaît comme stagiaire d'une session de formation continue cette année-là (recherché par matricule, ou à défaut nom + prénom).</div>
+    <div class="table-scroll"><table>
+      <tr><th>CIS</th><th>FMPA</th><th>Effectif ayant fait</th><th></th></tr>
+      ${lignes || `<tr><td colspan="4"><span class="info">Aucun CIS à afficher — renseigne d'abord l'effectif dans « Effectifs CIS ».</span></td></tr>`}
+    </table></div>
+  </div>`;
+}
+
+function _detailAgentsFMPA(agents) {
+  const tri = [...agents].sort((a, b) => (a._fait === b._fait ? 0 : a._fait ? 1 : -1) || (a.nom || '').localeCompare(b.nom || ''));
+  return `<div class="table-scroll"><table>
+    <tr><th>Nom</th><th>Prénom</th><th>Matricule</th><th>FMPA</th></tr>
+    ${tri.map(a => `<tr>
+      <td>${esc(a.nom)}</td><td>${esc(a.prenom)}</td><td>${esc(a.matricule || '—')}</td>
+      <td>${a._fait ? '<span class="statut-valide">✔ Fait</span>' : '<span class="statut-na">✗ Pas fait</span>'}</td>
+    </tr>`).join('')}
+  </table></div>`;
+}
+
+function _toggleDetailFMPA(idSafe) {
+  const tr = $('fmpa-detail-' + idSafe);
+  if (tr) tr.style.display = tr.style.display === 'none' ? '' : 'none';
+}
+
+// Passe par la table de correspondance idSafe → nom réel du CIS (voir _rendreSuiviFMPA) avant
+// d'appeler telechargerPVFMPACIS (définie dans pdf.js), pour éviter tout souci d'échappement avec
+// les CIS contenant une apostrophe.
+function _telechargerPVFMPAParId(idSafe, annee) {
+  const cis = (window._fmpaCISParId || {})[idSafe];
+  if (!cis) return toast('CIS introuvable', false);
+  telechargerPVFMPACIS(cis, annee);
 }
