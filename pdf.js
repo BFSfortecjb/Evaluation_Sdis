@@ -944,8 +944,9 @@ function _dessinerPagePVStage(doc, sess, formation, stagiaires, jury, aptMap) {
   doc.rect(0, y, largeur, 9, 'F');
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(13);
-  const libTypeFormation = (formation && formation.type_formation === 'initiale') ? 'Formation Initiale' : 'Formation Continue';
-  doc.text(`PROCÈS VERBAL PAE FPSE ${libTypeFormation}`, largeur / 2, y + 6, { align: 'center' });
+  const libTypeFormation = (formation && formation.type_formation === 'initiale') ? 'FORMATION INITIALE' : 'FORMATION CONTINUE';
+  const libDomaine = (formation && formation.domaine_competence) ? formation.domaine_competence.toUpperCase() : '';
+  doc.text(`PROCÈS VERBAL ${libTypeFormation}${libDomaine ? ' ' + libDomaine : ''}`, largeur / 2, y + 6, { align: 'center' });
   y += 15;
   doc.setTextColor(30, 30, 30);
   doc.setFontSize(11);
