@@ -2026,7 +2026,146 @@ function ongletParametresStage() {
       <label><input type="checkbox" id="pr-entretiens-obligatoires" style="width:auto" ${sess.entretiens_obligatoires !== false ? 'checked' : ''} ${S.vision === 'gfor' ? '' : 'disabled'}> Entretiens individuels obligatoires avant de pouvoir générer le PV de stage</label>
       <div class="info">${S.vision === 'gfor' ? 'Réglable uniquement par le GFor.' : 'Réglage réservé au GFor.'} Le PV de stage se génère depuis le bas de l'onglet Validation.</div>
       <button class="btn" onclick="enregistrerParametresStage()">Enregistrer</button>
-    </div>`;
+    </div>
+    ${_carteExportImportParametres()}`;
+}
+
+// ============================================================
+// EXPORT / IMPORT DES PARAMÈTRES DE STAGE — un RP configure un stage à sa manière (chronogramme,
+// seuils NA/ECA, trame des mises en situation) et veut la réutiliser sur un futur stage, souvent
+// propre à un RP/lieu (pas un modèle global de formation). Exporté en fichier JSON téléchargeable,
+// réimportable sur une autre session de LA MÊME FORMATION, tant qu'aucune MSP n'a encore été
+// évaluée sur cette session cible (au-delà, importer par-dessus risquerait de mélanger une
+// nouvelle trame avec des évaluations déjà saisies sur l'ancienne numérotation).
+// ============================================================
+function _carteExportImportParametres() {
+  const dejaCommencee = (S.data.evaluations || []).length > 0;
+  return `<div class="carte">
+    <h2>Export / import des paramètres du stage</h2>
+    <div class="info">Reprend les réglages NA/ECA, le nombre de MSP pour la certification, le chronogramme et la trame des mises en situation (jour, thème, sujet, type de MSP — sans les stagiaires ni les évaluateurs) pour les réutiliser sur un futur stage, souvent propres à un RP ou à un lieu de stage.</div>
+    <button class="btn secondaire" onclick="exporterParametresStage()">⬇️ Exporter les paramètres de ce stage</button>
+    <label style="margin-top:10px">Importer un fichier de paramètres (.json)</label>
+    <input type="file" accept=".json" onchange="importerParametresStage(this)" ${dejaCommencee ? 'disabled' : ''}>
+    <div class="info">${dejaCommencee
+      ? `⚠️ Import désactivé : au moins une mise en situation a déjà été évaluée sur ce stage. L'import n'est possible que sur un stage neuf, avant la première MSP validée.`
+      : `L'import n'est possible que sur une session de la même formation, et tant qu'aucune MSP n'a encore été évaluée sur ce stage.`}</div>
+  </div>`;
+}
+
+async function exporterParametresStage() {
+  const sess = S.session;
+  const contenu = {
+    type: 'export_parametres_stage_evaluation_sdis',
+    version: 1,
+    exporte_le: new Date().toISOString(),
+    formation_id: S.formation ? S.formation.id : null,
+    formation_code: S.formation ? S.formation.code : null,
+    formation_libelle: S.formation ? S.formation.libelle : null,
+    reglages: {
+      seuil_na_jury: sess.seuil_na_jury ?? null,
+      seuil_eca_jury: sess.seuil_eca_jury ?? null,
+      nb_msp_certification: sess.nb_msp_certification ?? null,
+    },
+    chronogramme: (S.data.blocsPlanning || []).map(b => ({
+      jour: b.jour, demi_journee: b.demi_journee, ordre: b.ordre,
+      libelle: b.libelle, annotation: b.annotation, couleur: b.couleur,
+      duree_minutes: b.duree_minutes, modele_id: b.modele_id || null,
+    })),
+    trame_msp: (S.data.passages || []).map(p => {
+      const theme = p.theme_id ? (S.formation.themes || []).find(t => t.id === p.theme_id) : null;
+      return {
+        numero: p.numero, jour: p.jour, theme_id: p.theme_id || null,
+        theme_libelle: theme ? theme.libelle : null, // filet de secours si theme_id ne matche pas à l'import
+        type_msp: p.type_msp || null, sujet: p.sujet || null,
+      };
+    }),
+  };
+  const blob = new Blob([JSON.stringify(contenu, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `parametres_stage_${(S.formation ? S.formation.code : 'stage')}_${sess.code_acces}.json`.replace(/\s+/g, '_');
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  toast('Paramètres exportés');
+}
+
+function importerParametresStage(input) {
+  const fichier = input.files[0];
+  if (!fichier) return;
+  if ((S.data.evaluations || []).length > 0) return toast('Import impossible : ce stage a déjà des MSP évaluées', false);
+  const lecteur = new FileReader();
+  lecteur.onload = async e => {
+    try {
+      const contenu = JSON.parse(e.target.result);
+      if (contenu.type !== 'export_parametres_stage_evaluation_sdis') return toast('Fichier non reconnu', false);
+      if (S.formation && contenu.formation_id && contenu.formation_id !== S.formation.id) {
+        return toast(`Ce fichier a été exporté depuis la formation « ${contenu.formation_libelle || contenu.formation_code || '?'} », différente de la formation de ce stage (« ${S.formation.libelle} »). Import refusé.`, false);
+      }
+
+      // ---------- Réglages ----------
+      const reglages = contenu.reglages || {};
+      const payloadSession = {};
+      if (reglages.seuil_na_jury != null) payloadSession.seuil_na_jury = reglages.seuil_na_jury;
+      if (reglages.seuil_eca_jury != null) payloadSession.seuil_eca_jury = reglages.seuil_eca_jury;
+      if (reglages.nb_msp_certification !== undefined) payloadSession.nb_msp_certification = reglages.nb_msp_certification;
+      if (Object.keys(payloadSession).length) {
+        const { error } = await sb.from('sessions').update(payloadSession).eq('id', S.session.id);
+        if (error) return toast(error.message, false);
+        Object.assign(S.session, payloadSession);
+      }
+
+      // ---------- Chronogramme ----------
+      const blocsExistants = S.data.blocsPlanning || [];
+      const nouveauxBlocs = (contenu.chronogramme || []).filter(b => {
+        // Un bloc issu d'un modèle imposé (modele_id) déjà instancié pour ce jour/demi-journée
+        // dans la session cible ne doit pas être dupliqué (l'app l'instancie déjà automatiquement
+        // à l'ouverture du Chronogramme) — les blocs libres, eux, sont toujours importés.
+        if (!b.modele_id) return true;
+        return !blocsExistants.some(x => x.modele_id === b.modele_id && x.jour === b.jour && x.demi_journee === b.demi_journee);
+      }).map(b => ({
+        session_id: S.session.id, jour: b.jour, demi_journee: b.demi_journee, ordre: b.ordre || 0,
+        libelle: b.libelle, annotation: b.annotation || null, couleur: b.couleur || null,
+        duree_minutes: b.duree_minutes || null, modele_id: b.modele_id || null,
+      }));
+      if (nouveauxBlocs.length) {
+        const { error } = await sb.from('blocs_planning').insert(nouveauxBlocs);
+        if (error) return toast(error.message, false);
+      }
+
+      // ---------- Trame des mises en situation ----------
+      const passagesExistants = S.data.passages || [];
+      const numerosPris = new Set(passagesExistants.map(p => p.numero));
+      let prochainNumero = numerosPris.size ? Math.max(...numerosPris) + 1 : 1;
+      const themesFormation = (S.formation && S.formation.themes) || [];
+      const normTheme = t => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+      const nouveauxPassages = (contenu.trame_msp || []).map(p => {
+        let numero = p.numero;
+        if (numerosPris.has(numero)) numero = prochainNumero;
+        numerosPris.add(numero);
+        prochainNumero = Math.max(prochainNumero, numero + 1);
+        // theme_id direct si même formation (cas courant) ; sinon filet de secours par libellé.
+        let themeId = p.theme_id && themesFormation.some(t => t.id === p.theme_id) ? p.theme_id : null;
+        if (!themeId && p.theme_libelle) {
+          const t = themesFormation.find(t => normTheme(t.libelle) === normTheme(p.theme_libelle));
+          if (t) themeId = t.id;
+        }
+        return {
+          session_id: S.session.id, numero, jour: p.jour || 'J1',
+          theme_id: themeId, type_msp: p.type_msp || null, sujet: p.sujet || null,
+        };
+      });
+      if (nouveauxPassages.length) {
+        const { error } = await sb.from('passages').insert(nouveauxPassages);
+        if (error) return toast(error.message, false);
+      }
+
+      toast(`Paramètres importés : ${nouveauxBlocs.length} bloc(s) de chronogramme, ${nouveauxPassages.length} mise(s) en situation`);
+      await chargerDonneesSession(S.session.id);
+      ongletParametresStage();
+    } catch (err) { toast('Fichier illisible : ' + err.message, false); }
+  };
+  lecteur.readAsText(fichier);
 }
 
 // ---------- PV de stage (livrable 9, modèle SDIS29) ----------
