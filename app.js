@@ -53,11 +53,14 @@ function carteSession(s) {
 function majMenu(actif) {
   const m = $('menu-gauche');
   if (!S.user || S.vision === 'stagiaire') { m.style.display = 'none'; return; }
-  const peutCreer = S.vision === 'rp' || S.vision === 'gfor';
+  // Les formateurs (moniteurs de centre) peuvent créer une session, mais uniquement de type FMPA
+  // (formation continue) — cf. ecranNouvelleSession qui filtre la liste des formations en conséquence.
+  const peutCreer = S.vision === 'rp' || S.vision === 'gfor' || S.vision === 'formateur';
   m.innerHTML = `<button class="${actif === 'dash' ? 'actif' : ''}" onclick="ecranAccueilStaff()">🏠 Tableau de bord</button>` +
-    (peutCreer ? `<button class="${actif === 'new' ? 'actif' : ''}" onclick="ecranNouvelleSession()">➕ Nouvelle session</button>` : '') +
+    (peutCreer ? `<button class="${actif === 'new' ? 'actif' : ''}" onclick="ecranNouvelleSession()">➕ Nouvelle session${S.vision === 'formateur' ? ' FMPA' : ''}</button>` : '') +
     `<button class="${actif === 'apt' ? 'actif' : ''}" onclick="ecranGestionFormateurs()">👨‍🏫 Formateurs</button>` +
     (S.vision === 'gfor' ? `<button class="${actif === 'param-form' ? 'actif' : ''}" onclick="ecranParametresFormations()">⚙️ Paramètres formations</button>` : '') +
+    (S.vision === 'gfor' ? `<button class="${actif === 'prog-fmpa' ? 'actif' : ''}" onclick="ecranProgrammesFMPA()">🗓️ Programmes FMPA</button>` : '') +
     ((S.vision === 'rp' || S.vision === 'gfor' || S.vision === 'chef_centre') ? `<button class="${actif === 'archives' ? 'actif' : ''}" onclick="ecranArchives()">🗂️ Archives entretiens & PV</button>` : '') +
     ((S.vision === 'rp' || S.vision === 'gfor' || S.vision === 'chef_centre') ? `<button class="${actif === 'fmpa' ? 'actif' : ''}" onclick="ecranSuiviFMPA()">📊 Suivi FMPA</button>` : '') +
     (S.vision === 'gfor' ? `<button class="${actif === 'effectifs' ? 'actif' : ''}" onclick="ecranEffectifsCIS()">👥 Effectifs CIS</button>` : '') +
@@ -108,20 +111,28 @@ function badgeQualif(q, suppr) {
 async function ecranNouvelleSession() {
   majMenu('new');
   show('ecran-staff-accueil');
+  // Un formateur (moniteur de centre) ne peut créer que des sessions FMPA (formation continue) —
+  // la formation initiale (multi-jours) reste réservée au RP/GFor.
+  const seulementFMPA = S.vision === 'formateur';
   const [f, apt] = await Promise.all([
     sb.from('formations').select('*').eq('actif', true),
     sb.from('aptitudes').select('*, qualifications(*)'),
   ]);
   if (f.error) return toast(f.error.message, false);
   window._aptRP = apt.data || [];
-  window._formations = f.data || [];
+  window._formations = seulementFMPA ? (f.data || []).filter(x => x.type_formation === 'continue') : (f.data || []);
+  if (seulementFMPA && !window._formations.length) {
+    $('staff-dashboard').innerHTML = `<div class="carte"><h2>Nouvelle session FMPA</h2>
+      <p class="info">Aucune formation continue n'est configurée pour l'instant — voir avec le Groupement Formation.</p></div>`;
+    return;
+  }
   $('staff-dashboard').innerHTML = `<div class="carte">
-    <h2>Nouvelle session</h2>
+    <h2>${seulementFMPA ? 'Nouvelle session FMPA' : 'Nouvelle session'}</h2>
     <div class="ligne">
       <div><label>Formation</label>
-        <select id="ns-formation" onchange="majListeRP()">${f.data.map(x =>
-          `<option value="${x.id}" data-code="${esc(x.code)}" data-dom="${esc(x.domaine_competence || '')}">${esc(x.libelle)}</option>`).join('')}</select></div>
-      <div><label>Lieu</label>${selectCIS('ns-lieu')}</div>
+        <select id="ns-formation" onchange="majListeRP();_majBlocFMPA()">${window._formations.map(x =>
+          `<option value="${x.id}" data-code="${esc(x.code)}" data-dom="${esc(x.domaine_competence || '')}" data-type="${esc(x.type_formation)}">${esc(x.libelle)}</option>`).join('')}</select></div>
+      <div><label>Lieu</label>${selectCIS('ns-lieu', seulementFMPA && S.user ? S.user.cis : undefined)}</div>
     </div>
     <div class="ligne">
       <div><label>Date début</label><input id="ns-debut" type="date"></div>
@@ -129,9 +140,42 @@ async function ecranNouvelleSession() {
     </div>
     <label>Responsable pédagogique (RP qualifié pour ce domaine)</label>
     <select id="ns-resp"></select>
+    <div id="ns-bloc-fmpa"></div>
     <button class="btn" onclick="creerSession()">Créer la session</button>
   </div>`;
   majListeRP();
+  await _majBlocFMPA();
+}
+
+// Affiche, quand la formation choisie est de type « continue » (FMPA), le choix du programme
+// FMPA de l'année puis la ou les séquences couvertes par cette session précise (une séquence
+// pouvant être couverte en plusieurs fois, par des formateurs différents).
+async function _majBlocFMPA() {
+  const opt = $('ns-formation').selectedOptions[0];
+  const bloc = $('ns-bloc-fmpa');
+  if (!opt || opt.dataset.type !== 'continue') { bloc.innerHTML = ''; window._programmesFMPADispo = []; return; }
+  const formationId = Number(opt.value);
+  const { data, error } = await sb.from('programmes_fmpa').select('*, sequences_fmpa(*)').eq('formation_id', formationId).order('annee', { ascending: false });
+  if (error) return toast(error.message, false);
+  window._programmesFMPADispo = data || [];
+  if (!window._programmesFMPADispo.length) {
+    bloc.innerHTML = `<div class="info" style="color:#c8102e">Aucun programme FMPA défini pour cette formation — demander au Groupement Formation de le créer (écran « Programmes FMPA »).</div>`;
+    return;
+  }
+  bloc.innerHTML = `<label>Programme FMPA (année)</label>
+    <select id="ns-fmpa-prog" onchange="_majSequencesFMPA()">${window._programmesFMPADispo.map(p => `<option value="${p.id}">${p.annee}</option>`).join('')}</select>
+    <label style="margin-top:8px">Séquence(s) couverte(s) par cette session</label>
+    <div id="ns-fmpa-sequences"></div>`;
+  _majSequencesFMPA();
+}
+
+function _majSequencesFMPA() {
+  const progId = Number($('ns-fmpa-prog').value);
+  const prog = (window._programmesFMPADispo || []).find(p => p.id === progId);
+  const seqs = prog ? [...(prog.sequences_fmpa || [])].sort((a, b) => a.ordre - b.ordre) : [];
+  $('ns-fmpa-sequences').innerHTML = seqs.map(s =>
+    `<label style="display:block"><input type="checkbox" class="ns-fmpa-seq" value="${s.id}" style="width:auto"> ${esc(s.libelle)} (${s.volume_horaire} h)</label>`).join('') ||
+    '<span class="info">Aucune séquence dans ce programme</span>';
 }
 
 function majListeRP() {
@@ -595,7 +639,7 @@ async function ecranAccueilStaff() {
   show('ecran-staff-accueil');
   const [sess, stag, forms, formt] = await Promise.all([
     sb.from('sessions').select('*, formations(*)').order('date_debut', { ascending: true, nullsFirst: false }),
-    sb.from('stagiaires').select('id, session_id, cis'),
+    sb.from('stagiaires').select('id, session_id, cis, nom, prenom'),
     sb.from('session_formateurs').select('id, session_id, nom'),
     sb.from('formations').select('*').eq('actif', true),
   ]);
@@ -632,6 +676,7 @@ async function ecranAccueilStaff() {
   for (const s of aVenir) (parDomaine[s.formations.domaine] = parDomaine[s.formations.domaine] || []).push(s);
 
   $('staff-dashboard').innerHTML = `
+    ${S.vision === 'chef_centre' ? _carteMesStagiairesChefCentre(enCours, aVenir, stag.data || []) : ''}
     <div class="carte stat-row"><div class="chiffre">${enCours.length}</div><div>session(s) en cours</div></div>
     <div class="carte stat-row"><div class="chiffre">${aVenir.length}</div><div>session(s) en préparation</div></div>
     <div class="carte stat-row"><div class="chiffre">${passees.length}</div><div>session(s) terminée(s)</div></div>
@@ -640,6 +685,40 @@ async function ecranAccueilStaff() {
       `<div class="section-titre">📅 En préparation — ${esc(d)}</div>` + parDomaine[d].map(carteSession).join('')).join('')}
     ${!enCours.length && !aVenir.length ? '<div class="carte"><p class="info">Aucune session en cours ou planifiée.</p></div>' : ''}
     ${passees.length ? '<div class="section-titre">✔ Terminées</div>' + passees.map(carteSession).join('') : ''}`;
+}
+
+// Carte dédiée en haut du tableau de bord du chef de centre : liste nommément les stagiaires de
+// son CIS actuellement en formation (sessions en cours), puis ceux à venir — plutôt que de le
+// laisser déduire cette info depuis la liste générique des sessions (peu lisible quand une
+// session mélange plusieurs CIS).
+function _carteMesStagiairesChefCentre(enCours, aVenir, stagiairesToutesSessions) {
+  const cis = S.user ? S.user.cis : null;
+  const mesStagiaires = sessions => sessions.map(s => ({
+    session: s,
+    stagiaires: stagiairesToutesSessions.filter(x => x.session_id === s.id && x.cis === cis),
+  })).filter(g => g.stagiaires.length);
+
+  const bloc = (groupes, vide) => groupes.length
+    ? groupes.map(g => `<div class="ligne" style="align-items:flex-start;cursor:pointer" onclick="ouvrirSession('${g.session.id}')">
+        <div style="flex:1">
+          <b>${esc(g.session.formations.libelle)}</b> — ${esc(g.session.lieu || 'lieu à définir')}
+          <div class="info">${esc(g.session.date_debut || '?')} → ${esc(g.session.date_fin || '?')}</div>
+          <div>${g.stagiaires.map(s => `<span class="badge" style="background:#00695c;color:#fff;margin:2px">${esc(s.prenom)} ${esc(s.nom)}</span>`).join(' ')}</div>
+        </div>
+      </div>`).join('')
+    : `<p class="info">${vide}</p>`;
+
+  const groupesEnCours = mesStagiaires(enCours);
+  const groupesAVenir = mesStagiaires(aVenir);
+  const nbEnCours = groupesEnCours.reduce((n, g) => n + g.stagiaires.length, 0);
+
+  return `<div class="carte">
+    <h2>Mes stagiaires (${esc(cis || 'CIS non renseigné')})</h2>
+    <div class="section-titre">🔴 En formation actuellement (${nbEnCours})</div>
+    ${bloc(groupesEnCours, 'Aucun stagiaire de ton CIS en formation en ce moment.')}
+    <div class="section-titre">📅 À venir</div>
+    ${bloc(groupesAVenir, 'Aucun stagiaire de ton CIS inscrit sur une session à venir.')}
+  </div>`;
 }
 
 // ---------- Vision stagiaire (pour l'encadrement) ----------
@@ -687,6 +766,15 @@ async function creerSession() {
   // Seuils NA/ECA « avis du jury » repris des valeurs par défaut de la formation
   // (réglables ensuite finement session par session dans l'onglet Paramètres).
   const formationChoisie = (window._formations || []).find(x => x.id === Number(sel.value));
+  // Session FMPA (formation continue) : rattachement au programme de l'année + séquences cochées.
+  const estFMPA = formationChoisie && formationChoisie.type_formation === 'continue';
+  const progSelect = $('ns-fmpa-prog');
+  const programmeId = estFMPA && progSelect && progSelect.value ? Number(progSelect.value) : null;
+  const sequenceIds = estFMPA
+    ? [...document.querySelectorAll('.ns-fmpa-seq:checked')].map(el => Number(el.value))
+    : [];
+  if (estFMPA && window._programmesFMPADispo && window._programmesFMPADispo.length && !sequenceIds.length)
+    return toast('Cocher au moins une séquence FMPA couverte par cette session', false);
   const { data, error } = await sb.from('sessions').insert({
     formation_id: Number(sel.value),
     code_acces: code,
@@ -696,8 +784,14 @@ async function creerSession() {
     responsable,
     seuil_na_jury: (formationChoisie && formationChoisie.seuil_na_jury_defaut) || 2,
     seuil_eca_jury: (formationChoisie && formationChoisie.seuil_eca_jury_defaut) || 4,
+    programme_fmpa_id: programmeId,
   }).select().single();
   if (error) return toast(error.message, false);
+  if (sequenceIds.length) {
+    const { error: e2 } = await sb.from('session_sequences_fmpa').insert(
+      sequenceIds.map(sid => ({ session_id: data.id, sequence_fmpa_id: sid })));
+    if (e2) toast('Session créée, mais erreur sur les séquences FMPA : ' + e2.message, false);
+  }
   toast('Session créée — code stagiaire : ' + code);
   ouvrirSession(data.id);
 }
@@ -3587,6 +3681,105 @@ function importerAgents(input) {
 }
 
 // ============================================================
+// PROGRAMMES FMPA (GFor) — définition annuelle, par formation continue, du nombre de séquences
+// et du volume horaire de chacune (le programme change chaque année, publié en général au 2e
+// semestre pour l'année suivante). Les formateurs piochent ensuite dans ces séquences pour créer
+// leurs sessions FMPA (voir ecranNouvelleSession / _majBlocFMPA).
+// ============================================================
+let _sequencesEnCours = [];
+
+async function ecranProgrammesFMPA() {
+  majMenu('prog-fmpa');
+  show('ecran-staff-accueil');
+  _sequencesEnCours = [];
+  const [f, prog] = await Promise.all([
+    sb.from('formations').select('*').eq('actif', true).eq('type_formation', 'continue'),
+    sb.from('programmes_fmpa').select('*, sequences_fmpa(*), formations(libelle, code)').order('annee', { ascending: false }),
+  ]);
+  if (f.error) return toast(f.error.message, false);
+  if (prog.error) return toast(prog.error.message, false);
+  window._formationsContinues = f.data || [];
+  const programmes = prog.data || [];
+
+  const lignesProg = programmes.map(p => {
+    const seqs = [...(p.sequences_fmpa || [])].sort((a, b) => a.ordre - b.ordre);
+    const totalH = seqs.reduce((n, s) => n + Number(s.volume_horaire || 0), 0);
+    return `<div class="carte" style="margin-bottom:10px">
+      <b>${esc(p.formations ? p.formations.libelle : '?')}</b> — ${p.annee}
+      <span class="badge" style="background:#607d8b;color:#fff;margin-left:6px">${seqs.length} séquence(s) · ${totalH} h</span>
+      <button class="btn petit secondaire" style="float:right" onclick="supprimerProgrammeFMPA(${p.id})">✕ Supprimer</button>
+      <div class="table-scroll" style="margin-top:8px"><table>
+        <tr><th>#</th><th>Séquence</th><th>Volume horaire</th></tr>
+        ${seqs.map(s => `<tr><td>${s.ordre}</td><td>${esc(s.libelle)}</td><td>${s.volume_horaire} h</td></tr>`).join('') || '<tr><td colspan="3"><span class="info">Aucune séquence</span></td></tr>'}
+      </table></div>
+    </div>`;
+  }).join('');
+
+  $('staff-dashboard').innerHTML = `<div class="carte">
+    <h2>Programmes FMPA</h2>
+    <div class="info">Le programme d'une FMPA change chaque année (généralement publié au 2<sup>e</sup> semestre pour l'année suivante) : nombre de séquences et volume horaire de chacune librement réglables. Les formateurs créent ensuite leurs sessions FMPA en piochant dans les séquences du programme de l'année.</div>
+    ${lignesProg || '<p class="info">Aucun programme créé pour l’instant.</p>'}
+  </div>
+  <div class="carte">
+    <h3>Créer un programme</h3>
+    ${window._formationsContinues.length ? `
+    <div class="ligne">
+      <div><label>Formation (continue)</label><select id="pf-formation">${window._formationsContinues.map(x => `<option value="${x.id}">${esc(x.libelle)}</option>`).join('')}</select></div>
+      <div><label>Année</label><input type="number" id="pf-annee" value="${new Date().getFullYear() + 1}" style="width:120px"></div>
+    </div>
+    <label>Séquences</label>
+    <div class="ligne">
+      <div><label>Libellé</label><input id="pf-seq-libelle" placeholder="ex : Bilan et prise en charge"></div>
+      <div><label>Volume horaire</label><input id="pf-seq-heures" type="number" step="0.5" value="2" style="width:100px"></div>
+      <div style="align-self:flex-end"><button class="btn petit" onclick="ajouterSequenceEnCours()">➕ Ajouter</button></div>
+    </div>
+    <div id="pf-seq-liste" style="margin:8px 0"></div>
+    <button class="btn" onclick="creerProgrammeFMPA()">Créer le programme</button>
+    ` : `<p class="info">Aucune formation continue configurée — passer d'abord une formation en « continue » depuis Paramètres formations.</p>`}
+  </div>`;
+}
+
+function _rendreSequencesEnCours() {
+  $('pf-seq-liste').innerHTML = _sequencesEnCours.map((s, i) =>
+    `<span class="badge" style="background:#00695c;color:#fff;margin:2px">
+      ${i + 1}. ${esc(s.libelle)} — ${s.volume_horaire} h
+      <a onclick="_sequencesEnCours.splice(${i},1);_rendreSequencesEnCours()" style="cursor:pointer;color:#fff"> ✕</a></span>`).join('');
+}
+
+function ajouterSequenceEnCours() {
+  const libelle = $('pf-seq-libelle').value.trim();
+  const heures = Number($('pf-seq-heures').value) || 0;
+  if (!libelle) return toast('Renseigner le libellé de la séquence', false);
+  if (heures <= 0) return toast('Renseigner un volume horaire valide', false);
+  _sequencesEnCours.push({ libelle, volume_horaire: heures });
+  $('pf-seq-libelle').value = '';
+  _rendreSequencesEnCours();
+}
+
+async function creerProgrammeFMPA() {
+  const formationId = Number($('pf-formation').value);
+  const annee = Number($('pf-annee').value);
+  if (!formationId) return toast('Choisir une formation', false);
+  if (!annee) return toast('Renseigner une année', false);
+  if (!_sequencesEnCours.length) return toast('Ajouter au moins une séquence', false);
+  const { data: prog, error } = await sb.from('programmes_fmpa').insert({ formation_id: formationId, annee }).select().single();
+  if (error) return toast(error.message.includes('unique') || error.code === '23505' ? 'Un programme existe déjà pour cette formation et cette année' : error.message, false);
+  const { error: e2 } = await sb.from('sequences_fmpa').insert(
+    _sequencesEnCours.map((s, i) => ({ programme_id: prog.id, libelle: s.libelle, volume_horaire: s.volume_horaire, ordre: i + 1 })));
+  if (e2) return toast(e2.message, false);
+  toast('Programme FMPA créé avec ' + _sequencesEnCours.length + ' séquence(s)');
+  ecranProgrammesFMPA();
+}
+
+async function supprimerProgrammeFMPA(id) {
+  if (!confirm('Supprimer ce programme FMPA et toutes ses séquences ? Les sessions déjà créées dessus perdront ce rattachement.')) return;
+  const { error } = await sb.from('programmes_fmpa').delete().eq('id', id);
+  if (error) return toast(error.message, false);
+  toast('Programme supprimé');
+  ecranProgrammesFMPA();
+}
+
+// ============================================================
 // SUIVI FMPA PAR CIS (RP/GFor/Chef de centre) — tableau de bord annuel.
 // Un CIS est « commencé » dès qu'une session de formation continue (formations.type_formation =
 // 'continue') a été organisée cette année-là (sessions.lieu = CIS). Un agent du roster est compté
@@ -3609,16 +3802,22 @@ async function _rendreSuiviFMPA() {
   const debut = annee + '-01-01', fin = annee + '-12-31';
   const cisChefCentre = S.vision === 'chef_centre' ? (S.user && S.user.cis) : null;
 
-  const [ag, sess] = await Promise.all([
+  const [ag, formCont, sess] = await Promise.all([
     sb.from('agents').select('*').eq('actif', true),
-    sb.from('sessions').select('id, lieu, date_debut, formations!inner(type_formation)')
+    sb.from('formations').select('*').eq('actif', true).eq('type_formation', 'continue').order('libelle'),
+    sb.from('sessions').select('id, lieu, date_debut, formation_id, programme_fmpa_id, formations!inner(type_formation)')
       .eq('formations.type_formation', 'continue').gte('date_debut', debut).lte('date_debut', fin),
   ]);
   if (ag.error) return toast(ag.error.message, false);
+  if (formCont.error) return toast(formCont.error.message, false);
   if (sess.error) return toast(sess.error.message, false);
   const agents = ag.data || [];
+  const formationsContinues = formCont.data || [];
   const sessionsFMPA = sess.data || [];
   const sessionIds = sessionsFMPA.map(s => s.id);
+
+  if (window._fmpaFormationId == null) window._fmpaFormationId = (formationsContinues[0] && formationsContinues[0].id) || null;
+  const formationChoisie = formationsContinues.find(f => f.id === window._fmpaFormationId) || null;
 
   let stagiaires = [];
   if (sessionIds.length) {
@@ -3628,13 +3827,64 @@ async function _rendreSuiviFMPA() {
   }
 
   const norm = t => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
-  const matriculesFaits = new Set(stagiaires.filter(s => s.matricule).map(s => norm(s.matricule)));
-  const nomsFaits = new Set(stagiaires.map(s => norm(s.nom + s.prenom)));
-  for (const a of agents) a._fait = (a.matricule && matriculesFaits.has(norm(a.matricule))) || nomsFaits.has(norm(a.nom + a.prenom));
 
+  // Programme FMPA de l'année pour la formation choisie (s'il existe) : permet un suivi cumulatif
+  // séquence par séquence, un agent pouvant avoir couvert les séquences requises sur plusieurs
+  // sessions différentes (formateurs différents, dates différentes).
+  let programme = null;
+  if (formationChoisie) {
+    const { data: progData, error: progErr } = await sb.from('programmes_fmpa')
+      .select('*, sequences_fmpa(*)').eq('formation_id', formationChoisie.id).eq('annee', annee).maybeSingle();
+    if (progErr) return toast(progErr.message, false);
+    programme = progData;
+  }
+  const sequencesProgramme = programme ? [...(programme.sequences_fmpa || [])].sort((a, b) => a.ordre - b.ordre) : [];
+
+  if (programme && sequencesProgramme.length) {
+    const idsSessionsFormation = sessionsFMPA.filter(s => s.formation_id === formationChoisie.id).map(s => s.id);
+    let seqParSession = {};
+    if (idsSessionsFormation.length) {
+      const { data: liens, error: e3 } = await sb.from('session_sequences_fmpa')
+        .select('session_id, sequence_fmpa_id').in('session_id', idsSessionsFormation);
+      if (e3) return toast(e3.message, false);
+      for (const l of (liens || [])) (seqParSession[l.session_id] = seqParSession[l.session_id] || new Set()).add(l.sequence_fmpa_id);
+    }
+    const stagiairesFormation = stagiaires.filter(s => idsSessionsFormation.includes(s.session_id));
+    const seqParMatricule = {}, seqParNom = {};
+    for (const s of stagiairesFormation) {
+      const seqs = seqParSession[s.session_id];
+      if (!seqs) continue;
+      if (s.matricule) {
+        const k = norm(s.matricule);
+        seqParMatricule[k] = seqParMatricule[k] || new Set();
+        seqs.forEach(id => seqParMatricule[k].add(id));
+      }
+      const k2 = norm(s.nom + s.prenom);
+      seqParNom[k2] = seqParNom[k2] || new Set();
+      seqs.forEach(id => seqParNom[k2].add(id));
+    }
+    const idsRequis = sequencesProgramme.map(s => s.id);
+    for (const a of agents) {
+      const set = (a.matricule && seqParMatricule[norm(a.matricule)]) || seqParNom[norm(a.nom + a.prenom)] || new Set();
+      a._seqFaites = idsRequis.filter(id => set.has(id)).length;
+      a._seqTotal = idsRequis.length;
+      a._fait = a._seqFaites >= a._seqTotal;
+    }
+  } else {
+    // Pas de programme défini pour cette formation/année : suivi simple historique (présence sur
+    // au moins une session de formation continue cette année-là, tous domaines confondus).
+    const matriculesFaits = new Set(stagiaires.filter(s => s.matricule).map(s => norm(s.matricule)));
+    const nomsFaits = new Set(stagiaires.map(s => norm(s.nom + s.prenom)));
+    for (const a of agents) {
+      a._fait = (a.matricule && matriculesFaits.has(norm(a.matricule))) || nomsFaits.has(norm(a.nom + a.prenom));
+      a._seqFaites = null; a._seqTotal = null;
+    }
+  }
+
+  const sessionsAffichees = formationChoisie ? sessionsFMPA.filter(s => s.formation_id === formationChoisie.id) : sessionsFMPA;
   const parCIS = {};
   for (const a of agents) (parCIS[a.cis || '— sans CIS —'] = parCIS[a.cis || '— sans CIS —'] || { agents: [], sessions: [] }).agents.push(a);
-  for (const s of sessionsFMPA) { const c = s.lieu || '— sans lieu —'; (parCIS[c] = parCIS[c] || { agents: [], sessions: [] }).sessions.push(s); }
+  for (const s of sessionsAffichees) { const c = s.lieu || '— sans lieu —'; (parCIS[c] = parCIS[c] || { agents: [], sessions: [] }).sessions.push(s); }
 
   let cisAffiches = Object.keys(parCIS).sort();
   if (cisChefCentre) cisAffiches = cisAffiches.filter(c => c === cisChefCentre);
@@ -3668,12 +3918,17 @@ async function _rendreSuiviFMPA() {
   $('staff-dashboard').innerHTML = `<div class="carte">
     <h2>Suivi FMPA par centre de secours</h2>
     <div class="ligne">
+      <div><label>Formation</label><select id="fmpa-formation" onchange="window._fmpaFormationId = Number(this.value) || null; _rendreSuiviFMPA()">
+        ${formationsContinues.length ? formationsContinues.map(f => `<option value="${f.id}" ${f.id === window._fmpaFormationId ? 'selected' : ''}>${esc(f.libelle)}</option>`).join('') : '<option value="">Aucune formation continue</option>'}
+      </select></div>
       <div><label>Année</label><input type="number" id="fmpa-annee" value="${annee}" style="width:100px" onchange="window._fmpaAnnee = Number(this.value) || ${new Date().getFullYear()}; _rendreSuiviFMPA()"></div>
       ${cisChefCentre ? '' : `<div style="align-self:flex-end"><button class="btn secondaire" onclick="exporterPVFMPAMasse(${annee})">🗂️ Export de masse (tous les CIS, ${annee})</button></div>`}
     </div>
-    <div class="info">Un CIS est considéré « commencé » dès qu'une session de formation continue (FMPA) y a été organisée sur l'année sélectionnée. L'effectif de référence vient de l'écran « Effectifs CIS » ; un agent est compté « fait » s'il apparaît comme stagiaire d'une session de formation continue cette année-là (recherché par matricule, ou à défaut nom + prénom).</div>
+    <div class="info">${programme && sequencesProgramme.length
+      ? `Suivi cumulatif du programme FMPA ${annee} de « ${esc(formationChoisie.libelle)} » (${sequencesProgramme.length} séquence(s) : ${esc(sequencesProgramme.map(s => s.libelle).join(', '))}). Un agent est compté « à jour » s'il a été présent, cumulativement sur une ou plusieurs sessions (formateurs différents possibles), sur toutes les séquences du programme.`
+      : `Aucun programme FMPA défini pour ${formationChoisie ? esc(formationChoisie.libelle) : 'cette formation'} en ${annee} — suivi simple (présence sur au moins une session de formation continue cette année-là, tous domaines confondus). Crée le programme depuis « Programmes FMPA » pour un suivi séquence par séquence. L'effectif de référence vient de l'écran « Effectifs CIS ».`}</div>
     <div class="table-scroll"><table>
-      <tr><th>CIS</th><th>FMPA</th><th>Effectif ayant fait</th><th></th></tr>
+      <tr><th>CIS</th><th>FMPA</th><th>Effectif à jour</th><th></th></tr>
       ${lignes || `<tr><td colspan="4"><span class="info">Aucun CIS à afficher — renseigne d'abord l'effectif dans « Effectifs CIS ».</span></td></tr>`}
     </table></div>
   </div>`;
@@ -3681,11 +3936,12 @@ async function _rendreSuiviFMPA() {
 
 function _detailAgentsFMPA(agents) {
   const tri = [...agents].sort((a, b) => (a._fait === b._fait ? 0 : a._fait ? 1 : -1) || (a.nom || '').localeCompare(b.nom || ''));
+  const avecSeq = agents.some(a => a._seqTotal);
   return `<div class="table-scroll"><table>
     <tr><th>Nom</th><th>Prénom</th><th>Matricule</th><th>FMPA</th></tr>
     ${tri.map(a => `<tr>
       <td>${esc(a.nom)}</td><td>${esc(a.prenom)}</td><td>${esc(a.matricule || '—')}</td>
-      <td>${a._fait ? '<span class="statut-valide">✔ Fait</span>' : '<span class="statut-na">✗ Pas fait</span>'}</td>
+      <td>${a._fait ? '<span class="statut-valide">✔ Fait</span>' : '<span class="statut-na">✗ Pas fait</span>'}${avecSeq && a._seqTotal ? ` <span class="info">(${a._seqFaites}/${a._seqTotal} séquence(s))</span>` : ''}</td>
     </tr>`).join('')}
   </table></div>`;
 }
