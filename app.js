@@ -38,8 +38,10 @@ function jauge(n, requis, libelle, max) {
 function carteSession(s) {
   const f = s.formations;
   const reqF = formateursRequis(f, s._nbStag || f.nb_stagiaires_max);
+  const estFMPA = f.type_formation === 'continue';
   return `<div class="carte carte-session" style="border-left-color:${esc(f.couleur)}" onclick="ouvrirSession('${s.id}')">
     <span class="badge" style="background:${esc(f.couleur)};color:#fff">${esc(f.domaine)}</span>
+    <span class="badge" style="background:${estFMPA ? '#ef6c00' : '#37474f'};color:#fff" title="${estFMPA ? 'Formation continue (FMPA)' : 'Formation initiale'}">${estFMPA ? 'FMPA' : 'FORMATION INITIALE'}</span>
     <b>${esc(f.libelle)}</b> — ${esc(s.lieu || 'lieu à définir')}
     <div class="info">${esc(s.date_debut || 'dates à définir')} → ${esc(s.date_fin || '')} · RP : ${esc(s.responsable || '—')} · code stagiaire : <b>${esc(s.code_acces)}</b></div>
     <div class="ligne" style="margin-top:8px">
@@ -59,7 +61,7 @@ function majMenu(actif) {
   m.innerHTML = `<button class="${actif === 'dash' ? 'actif' : ''}" onclick="ecranAccueilStaff()">🏠 Tableau de bord</button>` +
     (peutCreer ? `<button class="${actif === 'new' ? 'actif' : ''}" onclick="ecranNouvelleSession()">➕ Nouvelle session${S.vision === 'formateur' ? ' FMPA' : ''}</button>` : '') +
     `<button class="${actif === 'apt' ? 'actif' : ''}" onclick="ecranGestionFormateurs()">👨‍🏫 Formateurs</button>` +
-    (S.vision === 'gfor' ? `<button class="${actif === 'param-form' ? 'actif' : ''}" onclick="ecranParametresFormations()">⚙️ Paramètres formations</button>` : '') +
+    (S.vision === 'gfor' ? `<button class="${actif === 'param-form' ? 'actif' : ''}" onclick="ecranParametresFormations()">⚙️ Paramètres formation initiale</button>` : '') +
     (S.vision === 'gfor' ? `<button class="${actif === 'prog-fmpa' ? 'actif' : ''}" onclick="ecranProgrammesFMPA()">🗓️ Programmes FMPA</button>` : '') +
     ((S.vision === 'rp' || S.vision === 'gfor' || S.vision === 'chef_centre') ? `<button class="${actif === 'archives' ? 'actif' : ''}" onclick="ecranArchives()">🗂️ Archives entretiens & PV</button>` : '') +
     ((S.vision === 'rp' || S.vision === 'gfor' || S.vision === 'chef_centre') ? `<button class="${actif === 'fmpa' ? 'actif' : ''}" onclick="ecranSuiviFMPA()">📊 Suivi FMPA</button>` : '') +
@@ -82,8 +84,8 @@ const CIS_29 = ['AUDIERNE', 'BANNALEC', 'BREST', 'BRIEC', 'CAMARET-SUR-MER', 'CA
   'ROSPORDEN', 'SAINT-POL-DE-LEON', 'SAINT-RENAN', 'SCAER', 'SIZUN'].map(c => 'CIS ' + c)
   .concat(['SSSM']); // Service de Santé et de Secours Médical — traité comme un centre dans cette liste (rattachement des personnels)
 
-function selectCIS(id, valeur) {
-  return `<select id="${id}"><option value="">— CIS —</option>
+function selectCIS(id, valeur, onchange) {
+  return `<select id="${id}"${onchange ? ` onchange="${onchange}"` : ''}><option value="">— CIS —</option>
     ${CIS_29.map(c => `<option ${c === valeur ? 'selected' : ''}>${c}</option>`).join('')}</select>`;
 }
 
@@ -132,7 +134,7 @@ async function ecranNouvelleSession() {
       <div><label>Formation</label>
         <select id="ns-formation" onchange="majListeRP();_majBlocFMPA()">${window._formations.map(x =>
           `<option value="${x.id}" data-code="${esc(x.code)}" data-dom="${esc(x.domaine_competence || '')}" data-type="${esc(x.type_formation)}">${esc(x.libelle)}</option>`).join('')}</select></div>
-      <div><label>Lieu</label>${selectCIS('ns-lieu', seulementFMPA && S.user ? S.user.cis : undefined)}</div>
+      <div><label>Lieu</label>${selectCIS('ns-lieu', seulementFMPA && S.user ? S.user.cis : undefined, 'majListeRP()')}</div>
     </div>
     <div class="ligne">
       <div><label>Date début</label><input id="ns-debut" type="date"></div>
@@ -179,13 +181,23 @@ function _majSequencesFMPA() {
 }
 
 function majListeRP() {
-  const dom = $('ns-formation').selectedOptions[0].dataset.dom;
-  const rps = window._aptRP
-    .map(a => ({ a, q: (a.qualifications || []).find(q => q.role === 'rp' && (!dom || q.domaine === dom)) }))
+  const optForm = $('ns-formation').selectedOptions[0];
+  const dom = optForm.dataset.dom;
+  const estFMPA = optForm.dataset.type === 'continue';
+  const lieuCIS = $('ns-lieu') ? $('ns-lieu').value : '';
+  // Formation initiale : responsable = RP qualifié uniquement. Formation continue (FMPA) : pas de
+  // qualif RP requise — n'importe quel formateur qualifié dans le domaine peut être responsable,
+  // en priorité un formateur du centre de secours de la session (sans exclure les autres CIS).
+  const rolesAcceptes = estFMPA ? ['rp', 'formateur', 'for_de_for'] : ['rp'];
+  let candidats = window._aptRP
+    .map(a => ({ a, q: (a.qualifications || []).find(q => rolesAcceptes.includes(q.role) && (!dom || q.domaine === dom)) }))
     .filter(x => x.q);
+  if (estFMPA && lieuCIS) {
+    candidats = [...candidats].sort((x, y) => (x.a.cis === lieuCIS ? 0 : 1) - (y.a.cis === lieuCIS ? 0 : 1));
+  }
   $('ns-resp').innerHTML = `<option value="">— À définir —</option>` +
-    rps.map(x => `<option value="${x.a.id}" data-fin="${x.q.fin_validite}" data-nom="${esc(x.a.prenom + ' ' + x.a.nom)}">
-      ${esc(x.a.grade || '')} ${esc(x.a.prenom)} ${esc(x.a.nom)} — RP ${esc(x.q.domaine)} valide jusqu'au ${x.q.fin_validite}</option>`).join('');
+    candidats.map(x => `<option value="${x.a.id}" data-fin="${x.q.fin_validite}" data-nom="${esc(x.a.prenom + ' ' + x.a.nom)}">
+      ${esc(x.a.grade || '')} ${esc(x.a.prenom)} ${esc(x.a.nom)}${estFMPA && x.a.cis === lieuCIS ? ' ⭐ (même CIS)' : ''} — ${libelleRoleQualif(x.q.role)} ${esc(x.q.domaine)} valide jusqu'au ${x.q.fin_validite}</option>`).join('');
 }
 
 // ============================================================
@@ -3332,7 +3344,8 @@ async function ecranParametresFormations() {
     </tr>`).join('');
 
   $('staff-dashboard').innerHTML = `<div class="carte">
-    <h2>Paramètres formations</h2>
+    <h2>Paramètres formation initiale</h2>
+    <div class="info">Réglages du référentiel (compétences, critères, thèmes, jury...) — pour les formations continues (FMPA), voir l'écran « Programmes FMPA ».</div>
     <div class="info">Réglages généraux, valables pour toutes les sessions à venir de la formation (le RP/GFor peut encore affiner NA/ECA session par session dans l'onglet « Paramètres » de chaque session).</div>
     <div class="table-scroll"><table>
       <tr><th>Domaine</th><th>Formation</th><th>Jours</th><th>Stag. (indicatif)</th><th>MSP requises</th><th>Avis du jury si</th><th></th></tr>
@@ -3735,7 +3748,7 @@ async function ecranProgrammesFMPA() {
     </div>
     <div id="pf-seq-liste" style="margin:8px 0"></div>
     <button class="btn" onclick="creerProgrammeFMPA()">Créer le programme</button>
-    ` : `<p class="info">Aucune formation continue configurée — passer d'abord une formation en « continue » depuis Paramètres formations.</p>`}
+    ` : `<p class="info">Aucune formation continue configurée — passer d'abord une formation en « continue » depuis Paramètres formation initiale.</p>`}
   </div>`;
 }
 
