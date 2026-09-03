@@ -37,17 +37,21 @@ function jauge(n, requis, libelle, max) {
 
 function carteSession(s) {
   const f = s.formations;
-  const reqF = formateursRequis(f, s._nbStag || f.nb_stagiaires_max);
   const estFMPA = f.type_formation === 'continue';
+  const nbStag = s._nbStag || 0;
+  // FMPA (formation continue) : pas de RP requis, et le ratio formateur/stagiaires est fixe (1
+  // formateur pour 6 stagiaires) plutôt que le barème de la formation initiale — l'effectif n'est
+  // par ailleurs pas plafonné (un CIS entier, voire plusieurs, peut être présent en même temps).
+  const reqF = estFMPA ? Math.max(1, Math.ceil(nbStag / 6)) : formateursRequis(f, nbStag || f.nb_stagiaires_max);
   return `<div class="carte carte-session" style="border-left-color:${esc(f.couleur)}" onclick="ouvrirSession('${s.id}')">
     <span class="badge" style="background:${esc(f.couleur)};color:#fff">${esc(f.domaine)}</span>
     <span class="badge" style="background:${estFMPA ? '#ef6c00' : '#37474f'};color:#fff" title="${estFMPA ? 'Formation continue (FMPA)' : 'Formation initiale'}">${estFMPA ? 'FMPA' : 'FORMATION INITIALE'}</span>
     <b>${esc(f.libelle)}</b> — ${esc(s.lieu || 'lieu à définir')}
     <div class="info">${esc(s.date_debut || 'dates à définir')} → ${esc(s.date_fin || '')} · RP : ${esc(s.responsable || '—')} · code stagiaire : <b>${esc(s.code_acces)}</b></div>
     <div class="ligne" style="margin-top:8px">
-      ${jauge(s._nbStag, null, 'Stagiaires', f.nb_stagiaires_max)}
-      ${jauge(s.responsable ? 1 : 0, f.nb_rp_requis || 1, 'Resp. péda.')}
-      ${jauge(s._nbForm, reqF, 'Formateurs FPS')}
+      ${estFMPA ? `<div class="jauge-bloc"><small>Stagiaires : <b>${nbStag}</b></small></div>` : jauge(nbStag, null, 'Stagiaires', f.nb_stagiaires_max)}
+      ${estFMPA ? '' : jauge(s.responsable ? 1 : 0, f.nb_rp_requis || 1, 'Resp. péda.')}
+      ${jauge(s._nbForm, reqF, estFMPA ? 'Formateurs (1 / 6 stag.)' : 'Formateurs FPS')}
     </div>
   </div>`;
 }
