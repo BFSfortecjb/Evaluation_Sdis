@@ -43,7 +43,12 @@ function carteSession(s) {
   // formateur pour 6 stagiaires) plutôt que le barème de la formation initiale — l'effectif n'est
   // par ailleurs pas plafonné (un CIS entier, voire plusieurs, peut être présent en même temps).
   const reqF = estFMPA ? Math.max(1, Math.ceil(nbStag / 6)) : formateursRequis(f, nbStag || f.nb_stagiaires_max);
+  // Le GFor peut supprimer une session tant qu'elle n'est pas clôturée (statut « terminee ») —
+  // au-delà, la session porte des données définitives (PV, décisions du jury...) qu'on ne veut
+  // pas pouvoir effacer d'un clic.
+  const peutSupprimer = S.vision === 'gfor' && s.statut !== 'terminee';
   return `<div class="carte carte-session" style="border-left-color:${esc(f.couleur)}" onclick="ouvrirSession('${s.id}')">
+    ${peutSupprimer ? `<button class="btn petit secondaire" style="float:right" title="Supprimer cette session (non clôturée)" onclick="event.stopPropagation();supprimerSession('${s.id}')">🗑️</button>` : ''}
     <span class="badge" style="background:${esc(f.couleur)};color:#fff">${esc(f.domaine)}</span>
     <span class="badge" style="background:${estFMPA ? '#ef6c00' : '#37474f'};color:#fff" title="${estFMPA ? 'Formation continue (FMPA)' : 'Formation initiale'}">${estFMPA ? 'FMPA' : 'FORMATION INITIALE'}</span>
     <b>${esc(f.libelle)}</b> — ${esc(s.lieu || 'lieu à définir')}
@@ -65,8 +70,7 @@ function majMenu(actif) {
   m.innerHTML = `<button class="${actif === 'dash' ? 'actif' : ''}" onclick="ecranAccueilStaff()">🏠 Tableau de bord</button>` +
     (peutCreer ? `<button class="${actif === 'new' ? 'actif' : ''}" onclick="ecranNouvelleSession()">➕ Nouvelle session${S.vision === 'formateur' ? ' FMPA' : ''}</button>` : '') +
     `<button class="${actif === 'apt' ? 'actif' : ''}" onclick="ecranGestionFormateurs()">👨‍🏫 Formateurs</button>` +
-    (S.vision === 'gfor' ? `<button class="${actif === 'param-form' ? 'actif' : ''}" onclick="ecranParametresFormations()">⚙️ Paramètres formation initiale</button>` : '') +
-    (S.vision === 'gfor' ? `<button class="${actif === 'prog-fmpa' ? 'actif' : ''}" onclick="ecranProgrammesFMPA()">🗓️ Programmes FMPA</button>` : '') +
+    (S.vision === 'gfor' ? `<button class="${actif === 'param-form' ? 'actif' : ''}" onclick="ecranParametresFormations()">⚙️ Paramètres formations</button>` : '') +
     ((S.vision === 'rp' || S.vision === 'gfor' || S.vision === 'chef_centre') ? `<button class="${actif === 'archives' ? 'actif' : ''}" onclick="ecranArchives()">🗂️ Archives entretiens & PV</button>` : '') +
     ((S.vision === 'rp' || S.vision === 'gfor' || S.vision === 'chef_centre') ? `<button class="${actif === 'fmpa' ? 'actif' : ''}" onclick="ecranSuiviFMPA()">📊 Suivi FMPA</button>` : '') +
     (S.vision === 'gfor' ? `<button class="${actif === 'effectifs' ? 'actif' : ''}" onclick="ecranEffectifsCIS()">👥 Effectifs CIS</button>` : '') +
@@ -165,7 +169,7 @@ async function _majBlocFMPA() {
   if (error) return toast(error.message, false);
   window._programmesFMPADispo = data || [];
   if (!window._programmesFMPADispo.length) {
-    bloc.innerHTML = `<div class="info" style="color:#c8102e">Aucun programme FMPA défini pour cette formation — demander au Groupement Formation de le créer (écran « Programmes FMPA »).</div>`;
+    bloc.innerHTML = `<div class="info" style="color:#c8102e">Aucun programme FMPA défini pour cette formation — demander au Groupement Formation de le créer (Paramètres formations > 🗓️ Séquences FMPA).</div>`;
     return;
   }
   bloc.innerHTML = `<label>Programme FMPA (année)</label>
@@ -862,6 +866,19 @@ function joursPresenceISP() {
     for (let d = jd; d <= jf; d++) jours.add('J' + d);
   });
   return jours;
+}
+
+// Suppression d'une session non clôturée (GFor uniquement, cf. carteSession) — toutes les données
+// rattachées (stagiaires, passages, évaluations, entretiens, formateurs, séquences FMPA...) sont
+// supprimées en cascade par la base (foreign keys on delete cascade), en un seul delete ici.
+async function supprimerSession(sessionId) {
+  const { data: sess } = await sb.from('sessions').select('code_acces, statut').eq('id', sessionId).single();
+  if (sess && sess.statut === 'terminee') return toast('Cette session est clôturée — suppression impossible', false);
+  if (!confirm(`Supprimer définitivement la session ${sess ? sess.code_acces : ''} ? Toutes ses données (stagiaires, évaluations, entretiens...) seront perdues. Cette action est irréversible.`)) return;
+  const { error } = await sb.from('sessions').delete().eq('id', sessionId);
+  if (error) return toast(error.message, false);
+  toast('Session supprimée');
+  ecranAccueilStaff();
 }
 
 async function ouvrirSession(sessionId) {
@@ -3332,35 +3349,40 @@ async function ecranParametresFormations() {
   const { data: formationsToutes, error } = await sb.from('formations').select('*').order('libelle');
   if (error) return toast(error.message, false);
   window._formations = formationsToutes || [];
-  // Cet écran ne liste que les formations initiales (référentiel complet : compétences, jury,
-  // planning imposé...) — les formations continues (FMPA) se gèrent depuis « Programmes FMPA »,
-  // pour éviter que les deux types ne se mélangent dans la même liste.
-  const formations = (formationsToutes || []).filter(f => f.type_formation !== 'continue');
 
-  const lignes = formations.map(f => `<tr>
-      <td><span class="badge" style="background:${esc(f.couleur)};color:#fff">${esc(f.domaine)}</span></td>
-      <td><b>${esc(f.libelle)}</b> <span class="info">(${esc(f.code)})</span> <span class="info">${f.type_formation === 'initiale' ? 'FI' : 'FC'}</span>${f.actif ? '' : ' <span class="info">— inactive</span>'}</td>
-      <td>${f.nb_jours}</td>
-      <td>${f.nb_stagiaires_max}</td>
-      <td>${f.nb_msp_min} (+${f.nb_msp_rattrapage} rattrap.)</td>
-      <td>${f.mode_validation === 'msp_complexe_sans_faute' ? '<span class="badge" style="background:#6a1b9a;color:#fff">MSP complexe sans faute</span>' : `NA ≥ ${f.seuil_na_jury_defaut ?? 2} / ECA ≥ ${f.seuil_eca_jury_defaut ?? 4}`}</td>
+  // Un seul écran pour toutes les formations (initiale + FMPA continue) : le type se choisit à la
+  // création (formulaire), et les actions disponibles par ligne s'adaptent en conséquence —
+  // référentiel complet (compétences/planning imposé) pour une initiale, séquences FMPA pour une
+  // continue. Évite d'avoir deux écrans séparés qui se recoupent et prêtent à confusion.
+  const lignes = window._formations.map(f => {
+    const estFMPA = f.type_formation === 'continue';
+    return `<tr>
+      <td><span class="badge" style="background:${esc(f.couleur)};color:#fff">${esc(f.domaine)}</span>
+        <span class="badge" style="background:${estFMPA ? '#ef6c00' : '#37474f'};color:#fff">${estFMPA ? 'FC' : 'FI'}</span></td>
+      <td><b>${esc(f.libelle)}</b> <span class="info">(${esc(f.code)})</span>${f.actif ? '' : ' <span class="info">— inactive</span>'}</td>
+      <td>${estFMPA ? '<span class="info">—</span>' : f.nb_jours}</td>
+      <td>${estFMPA ? '<span class="info">1 / 6 stag.</span>' : f.nb_stagiaires_max}</td>
+      <td>${estFMPA ? '<span class="info">—</span>' : `${f.nb_msp_min} (+${f.nb_msp_rattrapage} rattrap.)`}</td>
+      <td>${estFMPA ? '<span class="info">—</span>' : (f.mode_validation === 'msp_complexe_sans_faute' ? '<span class="badge" style="background:#6a1b9a;color:#fff">MSP complexe sans faute</span>' : `NA ≥ ${f.seuil_na_jury_defaut ?? 2} / ECA ≥ ${f.seuil_eca_jury_defaut ?? 4}`)}</td>
       <td style="white-space:nowrap">
         <button class="btn petit secondaire" onclick="ecranFormulaireFormation(${f.id})">✏️</button>
-        <button class="btn petit secondaire" onclick="ecranCompetencesFormation(${f.id})">📋 Compétences</button>
-        <button class="btn petit secondaire" onclick="ecranBlocsPlanningModeles(${f.id})">🗓️ Planning imposé</button>
+        ${estFMPA
+          ? `<button class="btn petit secondaire" onclick="ecranSequencesFormation(${f.id})">🗓️ Séquences FMPA</button>`
+          : `<button class="btn petit secondaire" onclick="ecranCompetencesFormation(${f.id})">📋 Compétences</button>
+             <button class="btn petit secondaire" onclick="ecranBlocsPlanningModeles(${f.id})">🗓️ Planning imposé</button>`}
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 
   $('staff-dashboard').innerHTML = `<div class="carte">
-    <h2>Paramètres formation initiale</h2>
-    <div class="info">Réglages du référentiel (compétences, critères, thèmes, jury...) — pour les formations continues (FMPA), voir l'écran « Programmes FMPA ».</div>
-    <div class="info">Réglages généraux, valables pour toutes les sessions à venir de la formation (le RP/GFor peut encore affiner NA/ECA session par session dans l'onglet « Paramètres » de chaque session).</div>
+    <h2>Paramètres formations</h2>
+    <div class="info">Réglages généraux, valables pour toutes les sessions à venir de la formation (le RP/GFor peut encore affiner NA/ECA session par session dans l'onglet « Paramètres » de chaque session). Pour une formation continue (FMPA), les colonnes MSP/jury ne s'appliquent pas — configure plutôt ses séquences annuelles via « 🗓️ Séquences FMPA ».</div>
     <div class="table-scroll"><table>
-      <tr><th>Domaine</th><th>Formation</th><th>Jours</th><th>Stag. (indicatif)</th><th>MSP requises</th><th>Avis du jury si</th><th></th></tr>
-      ${lignes || `<tr><td colspan="7"><span class="info">Aucune formation initiale</span></td></tr>`}
+      <tr><th>Domaine / Type</th><th>Formation</th><th>Jours</th><th>Stag. / ratio</th><th>MSP requises</th><th>Avis du jury si</th><th></th></tr>
+      ${lignes || `<tr><td colspan="7"><span class="info">Aucune formation</span></td></tr>`}
     </table></div>
     <button class="btn" onclick="ecranFormulaireFormation()">➕ Nouvelle formation</button>
-    <div class="info" style="margin-top:6px">Pour créer une formation continue (FMPA), utilise aussi ce bouton puis règle « Type » sur continue dans le formulaire — elle apparaîtra ensuite dans « Programmes FMPA », pas dans cette liste.</div>
+    <div class="info" style="margin-top:6px">Choisis le type (initiale / continue) dans le formulaire — le reste de l'écran s'adapte automatiquement.</div>
   </div>`;
 }
 
@@ -3703,33 +3725,30 @@ function importerAgents(input) {
 }
 
 // ============================================================
-// PROGRAMMES FMPA (GFor) — définition annuelle, par formation continue, du nombre de séquences
-// et du volume horaire de chacune (le programme change chaque année, publié en général au 2e
-// semestre pour l'année suivante). Les formateurs piochent ensuite dans ces séquences pour créer
-// leurs sessions FMPA (voir ecranNouvelleSession / _majBlocFMPA).
+// SÉQUENCES FMPA (GFor) — définition annuelle, pour UNE formation continue donnée, du nombre de
+// séquences et du volume horaire de chacune (le programme change chaque année, publié en général
+// au 2e semestre pour l'année suivante). Accessible depuis Paramètres formations (bouton
+// « 🗓️ Séquences FMPA » sur une ligne de formation continue). Les formateurs piochent ensuite
+// dans ces séquences pour créer leurs sessions FMPA (voir ecranNouvelleSession / _majBlocFMPA).
 // ============================================================
 let _sequencesEnCours = [];
 
-async function ecranProgrammesFMPA() {
-  majMenu('prog-fmpa');
+async function ecranSequencesFormation(formationId) {
   show('ecran-staff-accueil');
   _sequencesEnCours = [];
-  const [f, prog] = await Promise.all([
-    sb.from('formations').select('*').eq('actif', true).eq('type_formation', 'continue'),
-    sb.from('programmes_fmpa').select('*, sequences_fmpa(*), formations(libelle, code)').order('annee', { ascending: false }),
-  ]);
-  if (f.error) return toast(f.error.message, false);
-  if (prog.error) return toast(prog.error.message, false);
-  window._formationsContinues = f.data || [];
-  const programmes = prog.data || [];
+  const f = (window._formations || []).find(x => x.id === formationId);
+  const { data: prog, error } = await sb.from('programmes_fmpa')
+    .select('*, sequences_fmpa(*)').eq('formation_id', formationId).order('annee', { ascending: false });
+  if (error) return toast(error.message, false);
+  const programmes = prog || [];
 
   const lignesProg = programmes.map(p => {
     const seqs = [...(p.sequences_fmpa || [])].sort((a, b) => a.ordre - b.ordre);
     const totalH = seqs.reduce((n, s) => n + Number(s.volume_horaire || 0), 0);
     return `<div class="carte" style="margin-bottom:10px">
-      <b>${esc(p.formations ? p.formations.libelle : '?')}</b> — ${p.annee}
+      <b>${p.annee}</b>
       <span class="badge" style="background:#607d8b;color:#fff;margin-left:6px">${seqs.length} séquence(s) · ${totalH} h</span>
-      <button class="btn petit secondaire" style="float:right" onclick="supprimerProgrammeFMPA(${p.id})">✕ Supprimer</button>
+      <button class="btn petit secondaire" style="float:right" onclick="supprimerProgrammeFMPA(${p.id}, ${formationId})">✕ Supprimer</button>
       <div class="table-scroll" style="margin-top:8px"><table>
         <tr><th>#</th><th>Séquence</th><th>Volume horaire</th></tr>
         ${seqs.map(s => `<tr><td>${s.ordre}</td><td>${esc(s.libelle)}</td><td>${s.volume_horaire} h</td></tr>`).join('') || '<tr><td colspan="3"><span class="info">Aucune séquence</span></td></tr>'}
@@ -3737,29 +3756,15 @@ async function ecranProgrammesFMPA() {
     </div>`;
   }).join('');
 
-  const lignesFormationsContinues = window._formationsContinues.map(f => `<tr>
-      <td><span class="badge" style="background:${esc(f.couleur)};color:#fff">${esc(f.domaine)}</span></td>
-      <td><b>${esc(f.libelle)}</b> <span class="info">(${esc(f.code)})</span>${f.actif ? '' : ' <span class="info">— inactive</span>'}</td>
-      <td><button class="btn petit secondaire" onclick="ecranFormulaireFormation(${f.id})">✏️ Modifier</button></td>
-    </tr>`).join('');
-
   $('staff-dashboard').innerHTML = `<div class="carte">
-    <h2>Programmes FMPA</h2>
-    <div class="info">Le programme d'une FMPA change chaque année (généralement publié au 2<sup>e</sup> semestre pour l'année suivante) : nombre de séquences et volume horaire de chacune librement réglables. Les formateurs créent ensuite leurs sessions FMPA en piochant dans les séquences du programme de l'année.</div>
+    <span class="lien-retour" onclick="ecranParametresFormations()">← Retour aux paramètres formations</span>
+    <h2>Séquences FMPA — ${esc(f ? f.libelle : '')}</h2>
+    <div class="info">Le programme change chaque année (généralement publié au 2<sup>e</sup> semestre pour l'année suivante) : nombre de séquences et volume horaire de chacune librement réglables. Les formateurs créent ensuite leurs sessions FMPA en piochant dans les séquences du programme de l'année.</div>
     ${lignesProg || '<p class="info">Aucun programme créé pour l’instant.</p>'}
   </div>
   <div class="carte">
-    <h3>Formations continues (FMPA)</h3>
-    <div class="table-scroll"><table>
-      <tr><th>Domaine</th><th>Formation</th><th></th></tr>
-      ${lignesFormationsContinues || `<tr><td colspan="3"><span class="info">Aucune formation continue — crée-la depuis « Paramètres formation initiale » > Nouvelle formation, avec Type = continue.</span></td></tr>`}
-    </table></div>
-  </div>
-  <div class="carte">
     <h3>Créer un programme</h3>
-    ${window._formationsContinues.length ? `
     <div class="ligne">
-      <div><label>Formation (continue)</label><select id="pf-formation">${window._formationsContinues.map(x => `<option value="${x.id}">${esc(x.libelle)}</option>`).join('')}</select></div>
       <div><label>Année</label><input type="number" id="pf-annee" value="${new Date().getFullYear() + 1}" style="width:120px"></div>
     </div>
     <label>Séquences</label>
@@ -3769,8 +3774,7 @@ async function ecranProgrammesFMPA() {
       <div style="align-self:flex-end"><button class="btn petit" onclick="ajouterSequenceEnCours()">➕ Ajouter</button></div>
     </div>
     <div id="pf-seq-liste" style="margin:8px 0"></div>
-    <button class="btn" onclick="creerProgrammeFMPA()">Créer le programme</button>
-    ` : `<p class="info">Aucune formation continue configurée — passer d'abord une formation en « continue » depuis Paramètres formation initiale.</p>`}
+    <button class="btn" onclick="creerProgrammeFMPA(${formationId})">Créer le programme</button>
   </div>`;
 }
 
@@ -3791,10 +3795,8 @@ function ajouterSequenceEnCours() {
   _rendreSequencesEnCours();
 }
 
-async function creerProgrammeFMPA() {
-  const formationId = Number($('pf-formation').value);
+async function creerProgrammeFMPA(formationId) {
   const annee = Number($('pf-annee').value);
-  if (!formationId) return toast('Choisir une formation', false);
   if (!annee) return toast('Renseigner une année', false);
   if (!_sequencesEnCours.length) return toast('Ajouter au moins une séquence', false);
   const { data: prog, error } = await sb.from('programmes_fmpa').insert({ formation_id: formationId, annee }).select().single();
@@ -3803,15 +3805,15 @@ async function creerProgrammeFMPA() {
     _sequencesEnCours.map((s, i) => ({ programme_id: prog.id, libelle: s.libelle, volume_horaire: s.volume_horaire, ordre: i + 1 })));
   if (e2) return toast(e2.message, false);
   toast('Programme FMPA créé avec ' + _sequencesEnCours.length + ' séquence(s)');
-  ecranProgrammesFMPA();
+  ecranSequencesFormation(formationId);
 }
 
-async function supprimerProgrammeFMPA(id) {
+async function supprimerProgrammeFMPA(id, formationId) {
   if (!confirm('Supprimer ce programme FMPA et toutes ses séquences ? Les sessions déjà créées dessus perdront ce rattachement.')) return;
   const { error } = await sb.from('programmes_fmpa').delete().eq('id', id);
   if (error) return toast(error.message, false);
   toast('Programme supprimé');
-  ecranProgrammesFMPA();
+  ecranSequencesFormation(formationId);
 }
 
 // ============================================================
@@ -3961,7 +3963,7 @@ async function _rendreSuiviFMPA() {
     </div>
     <div class="info">${programme && sequencesProgramme.length
       ? `Suivi cumulatif du programme FMPA ${annee} de « ${esc(formationChoisie.libelle)} » (${sequencesProgramme.length} séquence(s) : ${esc(sequencesProgramme.map(s => s.libelle).join(', '))}). Un agent est compté « à jour » s'il a été présent, cumulativement sur une ou plusieurs sessions (formateurs différents possibles), sur toutes les séquences du programme.`
-      : `Aucun programme FMPA défini pour ${formationChoisie ? esc(formationChoisie.libelle) : 'cette formation'} en ${annee} — suivi simple (présence sur au moins une session de formation continue cette année-là, tous domaines confondus). Crée le programme depuis « Programmes FMPA » pour un suivi séquence par séquence. L'effectif de référence vient de l'écran « Effectifs CIS ».`}</div>
+      : `Aucun programme FMPA défini pour ${formationChoisie ? esc(formationChoisie.libelle) : 'cette formation'} en ${annee} — suivi simple (présence sur au moins une session de formation continue cette année-là, tous domaines confondus). Crée le programme depuis Paramètres formations > 🗓️ Séquences FMPA pour un suivi séquence par séquence. L'effectif de référence vient de l'écran « Effectifs CIS ».`}</div>
     <div class="table-scroll"><table>
       <tr><th>CIS</th><th>FMPA</th><th>Effectif à jour</th><th></th></tr>
       ${lignes || `<tr><td colspan="4"><span class="info">Aucun CIS à afficher — renseigne d'abord l'effectif dans « Effectifs CIS ».</span></td></tr>`}
