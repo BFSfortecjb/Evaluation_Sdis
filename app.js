@@ -2031,7 +2031,7 @@ function _mspVueCas() {
       }).join('')}</tr>`).join('')}
     </table></div>` : '<p class="info">Aucun cas concret défini pour cette formation.</p>';
   return `<div class="carte">
-      <div class="info">Qui est déjà passé sur quel cas concret / MSP imposée — surtout utile pour CA1E1E PPBE et Équipier SUAP, mais disponible dès qu'une formation a des cas concrets définis.</div>
+      <div class="info">Qui est déjà passé sur quel cas concret / MSP imposée — surtout utile pour CA1E1E PPBE et Équipier SSUAP, mais disponible dès qu'une formation a des cas concrets définis.</div>
       ${table}
     </div>`;
 }
