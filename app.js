@@ -3329,11 +3329,15 @@ let _baremeEnCours = [];
 async function ecranParametresFormations() {
   majMenu('param-form');
   show('ecran-staff-accueil');
-  const { data: formations, error } = await sb.from('formations').select('*').order('libelle');
+  const { data: formationsToutes, error } = await sb.from('formations').select('*').order('libelle');
   if (error) return toast(error.message, false);
-  window._formations = formations || [];
+  window._formations = formationsToutes || [];
+  // Cet écran ne liste que les formations initiales (référentiel complet : compétences, jury,
+  // planning imposé...) — les formations continues (FMPA) se gèrent depuis « Programmes FMPA »,
+  // pour éviter que les deux types ne se mélangent dans la même liste.
+  const formations = (formationsToutes || []).filter(f => f.type_formation !== 'continue');
 
-  const lignes = (formations || []).map(f => `<tr>
+  const lignes = formations.map(f => `<tr>
       <td><span class="badge" style="background:${esc(f.couleur)};color:#fff">${esc(f.domaine)}</span></td>
       <td><b>${esc(f.libelle)}</b> <span class="info">(${esc(f.code)})</span> <span class="info">${f.type_formation === 'initiale' ? 'FI' : 'FC'}</span>${f.actif ? '' : ' <span class="info">— inactive</span>'}</td>
       <td>${f.nb_jours}</td>
@@ -3353,9 +3357,10 @@ async function ecranParametresFormations() {
     <div class="info">Réglages généraux, valables pour toutes les sessions à venir de la formation (le RP/GFor peut encore affiner NA/ECA session par session dans l'onglet « Paramètres » de chaque session).</div>
     <div class="table-scroll"><table>
       <tr><th>Domaine</th><th>Formation</th><th>Jours</th><th>Stag. (indicatif)</th><th>MSP requises</th><th>Avis du jury si</th><th></th></tr>
-      ${lignes}
+      ${lignes || `<tr><td colspan="7"><span class="info">Aucune formation initiale</span></td></tr>`}
     </table></div>
     <button class="btn" onclick="ecranFormulaireFormation()">➕ Nouvelle formation</button>
+    <div class="info" style="margin-top:6px">Pour créer une formation continue (FMPA), utilise aussi ce bouton puis règle « Type » sur continue dans le formulaire — elle apparaîtra ensuite dans « Programmes FMPA », pas dans cette liste.</div>
   </div>`;
 }
 
@@ -3732,10 +3737,23 @@ async function ecranProgrammesFMPA() {
     </div>`;
   }).join('');
 
+  const lignesFormationsContinues = window._formationsContinues.map(f => `<tr>
+      <td><span class="badge" style="background:${esc(f.couleur)};color:#fff">${esc(f.domaine)}</span></td>
+      <td><b>${esc(f.libelle)}</b> <span class="info">(${esc(f.code)})</span>${f.actif ? '' : ' <span class="info">— inactive</span>'}</td>
+      <td><button class="btn petit secondaire" onclick="ecranFormulaireFormation(${f.id})">✏️ Modifier</button></td>
+    </tr>`).join('');
+
   $('staff-dashboard').innerHTML = `<div class="carte">
     <h2>Programmes FMPA</h2>
     <div class="info">Le programme d'une FMPA change chaque année (généralement publié au 2<sup>e</sup> semestre pour l'année suivante) : nombre de séquences et volume horaire de chacune librement réglables. Les formateurs créent ensuite leurs sessions FMPA en piochant dans les séquences du programme de l'année.</div>
     ${lignesProg || '<p class="info">Aucun programme créé pour l’instant.</p>'}
+  </div>
+  <div class="carte">
+    <h3>Formations continues (FMPA)</h3>
+    <div class="table-scroll"><table>
+      <tr><th>Domaine</th><th>Formation</th><th></th></tr>
+      ${lignesFormationsContinues || `<tr><td colspan="3"><span class="info">Aucune formation continue — crée-la depuis « Paramètres formation initiale » > Nouvelle formation, avec Type = continue.</span></td></tr>`}
+    </table></div>
   </div>
   <div class="carte">
     <h3>Créer un programme</h3>
