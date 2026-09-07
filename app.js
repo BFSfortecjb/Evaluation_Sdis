@@ -39,10 +39,15 @@ function carteSession(s) {
   const f = s.formations;
   const estFMPA = f.type_formation === 'continue';
   const nbStag = s._nbStag || 0;
+  const nbForm = s._nbForm || 0;
   // FMPA (formation continue) : pas de RP requis, et le ratio formateur/stagiaires est fixe (1
-  // formateur pour 6 stagiaires) plutôt que le barème de la formation initiale — l'effectif n'est
-  // par ailleurs pas plafonné (un CIS entier, voire plusieurs, peut être présent en même temps).
-  const reqF = estFMPA ? Math.max(1, Math.ceil(nbStag / 6)) : formateursRequis(f, nbStag || f.nb_stagiaires_max);
+  // formateur pour 6 stagiaires) plutôt que le barème de la formation initiale. Contrairement à la
+  // formation initiale (nb de formateurs requis calculé à partir du nb de stagiaires), c'est ici
+  // l'inverse : ce sont les formateurs déjà inscrits qui déterminent la capacité d'accueil en
+  // stagiaires (2 formateurs → jusqu'à 12 stagiaires), l'effectif n'étant pas plafonné par ailleurs
+  // (un CIS entier, voire plusieurs, peut être présent en même temps).
+  const capaciteFMPA = nbForm * 6;
+  const reqF = estFMPA ? 0 : formateursRequis(f, nbStag || f.nb_stagiaires_max);
   // Le GFor peut supprimer une session tant qu'elle n'est pas clôturée (statut « terminee ») —
   // au-delà, la session porte des données définitives (PV, décisions du jury...) qu'on ne veut
   // pas pouvoir effacer d'un clic.
@@ -54,9 +59,15 @@ function carteSession(s) {
     <b>${esc(f.libelle)}</b> — ${esc(s.lieu || 'lieu à définir')}
     <div class="info">${esc(s.date_debut || 'dates à définir')} → ${esc(s.date_fin || '')} · RP : ${esc(s.responsable || '—')} · code stagiaire : <b>${esc(s.code_acces)}</b></div>
     <div class="ligne" style="margin-top:8px">
-      ${estFMPA ? `<div class="jauge-bloc"><small>Stagiaires : <b>${nbStag}</b></small></div>` : jauge(nbStag, null, 'Stagiaires', f.nb_stagiaires_max)}
+      ${estFMPA
+        ? (capaciteFMPA > 0
+            ? jauge(nbStag, null, 'Stagiaires (capacité selon formateurs)', capaciteFMPA)
+            : `<div class="jauge-bloc"><small>Stagiaires : <b>${nbStag}</b> <span class="info">(ajouter des formateurs pour définir la capacité)</span></small></div>`)
+        : jauge(nbStag, null, 'Stagiaires', f.nb_stagiaires_max)}
       ${estFMPA ? '' : jauge(s.responsable ? 1 : 0, f.nb_rp_requis || 1, 'Resp. péda.')}
-      ${jauge(s._nbForm, reqF, estFMPA ? 'Formateurs (1 / 6 stag.)' : 'Formateurs FPS')}
+      ${estFMPA
+        ? `<div class="jauge-bloc"><small>Formateurs : <b>${nbForm}</b> → capacité <b>${capaciteFMPA}</b> stagiaire(s) (1 pour 6)</small></div>`
+        : jauge(nbForm, reqF, 'Formateurs FPS')}
     </div>
   </div>`;
 }
@@ -80,6 +91,17 @@ function majMenu(actif) {
 
 const GRADES = ['SAP', 'CAP', 'CCH', 'SGT', 'SCH', 'ADJ', 'ADC', 'LTN', 'CNE', 'CDT', 'LCL', 'COL'];
 const DOMAINES_COMP = ['INCENDIE', 'PPBE', 'SSUAP', 'SR'];
+// Onglets de session configurables formation par formation (formations.modules_actifs) — « Paramètres »
+// n'est pas dans cette liste : il reste toujours accessible au RP/GFor, non désactivable.
+const MODULES_SESSION = [
+  ['stagiaires', 'Stagiaires'], ['formateurs', 'Formateurs'], ['garde', 'Feuille de garde'],
+  ['evaluations', 'Évaluations'], ['msp', 'Suivi MSP'], ['validation', 'Validation'], ['comparatif', 'Comparatif'],
+  ['bilanjour', 'Bilan journalier'], ['planning', 'Chronogramme'], ['avis', 'Mon avis de fin de stage'],
+  ['entretiens', 'Entretiens individuels'], ['compterendu', 'Compte rendu de fin de stage'],
+];
+// Préréglage suggéré pour une nouvelle formation continue (FMPA) : l'essentiel (présence), sans le
+// dispositif de certification de la formation initiale. Ajustable ensuite au cas par cas.
+const MODULES_FMPA_DEFAUT = ['stagiaires', 'formateurs'];
 const STATUTS = ['SPV', 'SPP', 'PATS'];
 // Liste des CIS du Finistère — à ajuster librement ici si besoin
 const CIS_29 = ['AUDIERNE', 'BANNALEC', 'BREST', 'BRIEC', 'CAMARET-SUR-MER', 'CARHAIX', 'CHATEAULIN',
@@ -909,7 +931,7 @@ async function ouvrirSession(sessionId) {
   // MSP) ni à l'onglet Validation (décision de certification) — ce sont des attributions RP/GFor.
   // Les onglets Stagiaires et Chronogramme restent visibles mais allégés (voir ongletStagiaires
   // et _rendreOngletPlanning : simple consultation, pas de gestion).
-  const onglets = S.vision === 'chef_centre'
+  let onglets = S.vision === 'chef_centre'
     ? [['msp', 'Suivi MSP']]
     : S.vision === 'formateur'
     ? [
@@ -929,10 +951,24 @@ async function ouvrirSession(sessionId) {
     onglets.push(['compterendu', 'Compte rendu de fin de stage']);
     onglets.push(['parametres', 'Paramètres']);
   }
+  // Une FMPA est plus légère qu'une formation initiale (pas de bilan journalier, pas forcément de
+  // chronogramme, pas de certification...) : on filtre la barre d'onglets selon les modules
+  // activés pour cette formation (formations.modules_actifs, réglable dans Paramètres formations).
+  // « Paramètres » reste toujours accessible au RP/GFor (sinon impossible de reconfigurer). La
+  // vision chef de centre n'est pas filtrée : son unique onglet Suivi MSP est sa seule porte
+  // d'entrée sur la session.
+  if (S.vision !== 'chef_centre') {
+    const modulesActifs = new Set((S.formation && Array.isArray(S.formation.modules_actifs)) ? S.formation.modules_actifs : MODULES_SESSION.map(m => m[0]));
+    onglets = onglets.filter(([id]) => id === 'parametres' || modulesActifs.has(id));
+  }
   $('session-onglets').innerHTML = onglets.map(([id, lbl]) =>
     `<button id="ong-${id}" onclick="ongletSession('${id}')">${lbl}</button>`).join('');
   show('ecran-session');
-  ongletSession(S.vision === 'chef_centre' ? 'msp' : S.vision === 'formateur' ? 'evaluations' : 'stagiaires');
+  // Onglet par défaut à l'ouverture : le préféré selon la vision s'il est bien présent dans la
+  // barre (peut avoir été désactivé pour cette formation), sinon le premier onglet disponible.
+  const idsPresents = new Set(onglets.map(([id]) => id));
+  const prefere = S.vision === 'chef_centre' ? 'msp' : S.vision === 'formateur' ? 'evaluations' : 'stagiaires';
+  ongletSession(idsPresents.has(prefere) ? prefere : (onglets[0] ? onglets[0][0] : 'parametres'));
 }
 
 function ongletSession(id) {
@@ -3437,6 +3473,17 @@ function ecranFormulaireFormation(id) {
       <div class="info">Détermine le libellé imprimé en en-tête du PV de stage (« PROCÈS VERBAL PAE FPSE Formation Continue » ou « ...Formation Initiale »).</div></div>
     </div>
 
+    <h3>Onglets de session actifs</h3>
+    <div class="info">Une FMPA est plus légère qu'une formation initiale (pas forcément de bilan journalier, de chronogramme, de certification...) — choisis ici les onglets qui apparaîtront dans une session de cette formation. « Paramètres » reste toujours accessible au RP/GFor, quel que soit le choix ci-dessous.</div>
+    <div class="ligne" style="margin-bottom:6px">
+      <button class="btn petit secondaire" type="button" onclick="MODULES_SESSION.forEach(([id]) => { const c = $('fm-mod-' + id); if (c) c.checked = true; })">Tout cocher</button>
+      <button class="btn petit secondaire" type="button" onclick="const d = new Set(MODULES_FMPA_DEFAUT); MODULES_SESSION.forEach(([id]) => { const c = $('fm-mod-' + id); if (c) c.checked = d.has(id); })">Préréglage FMPA (stagiaires + formateurs)</button>
+    </div>
+    ${MODULES_SESSION.map(([id, lbl]) => {
+      const actifs = f ? (Array.isArray(f.modules_actifs) ? f.modules_actifs : MODULES_SESSION.map(m => m[0])) : MODULES_FMPA_DEFAUT;
+      return `<label style="display:inline-block;width:220px"><input type="checkbox" id="fm-mod-${id}" style="width:auto" ${actifs.includes(id) ? 'checked' : ''}> ${esc(lbl)}</label>`;
+    }).join('')}
+
     <h3>Avis du jury — seuils par défaut</h3>
     <div class="info">Nombre de ECA ou de NA sur une même compétence à partir duquel la validation passe en « Avis du jury ». Valeur reprise à la création de chaque nouvelle session de cette formation (réglable ensuite session par session). Sans effet si le mode de validation ci-dessous est réglé sur « MSP complexe sans faute ».</div>
     <div class="ligne">
@@ -3495,6 +3542,7 @@ async function enregistrerFormation(id) {
     mode_validation: $('fm-types-msp').checked ? $('fm-mode-validation').value : 'standard',
     necessite_isp: $('fm-necessite-isp').checked,
     type_formation: $('fm-type-formation').value,
+    modules_actifs: MODULES_SESSION.map(([mid]) => mid).filter(mid => $('fm-mod-' + mid) && $('fm-mod-' + mid).checked),
   };
   const req = id ? sb.from('formations').update(payload).eq('id', id) : sb.from('formations').insert(payload);
   const { error } = await req;
