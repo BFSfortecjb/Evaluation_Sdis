@@ -1344,3 +1344,197 @@ async function genererChevalets() {
   doc.save(`Chevalets_${(S.session.lieu || S.formation.libelle || 'session')}.pdf`.replace(/\s+/g, '_'));
   toast(`${stagiaires.length} chevalet(s) généré(s)`);
 }
+
+// ---------- Grille d'évaluation FMPA (livrable : PDF paysage fidèle au modèle papier) ----------
+// Une page A4 paysage par stagiaire (et par séquence) : autoévaluation de l'apprenant (non acquis /
+// acquis / maîtrisé), verdict formateur (non évalué / inapte / apte) par compétence, attitude
+// transversale, axes de travail, points d'ancrage, signatures. Lignes = compétences de la formation
+// (S.formation.competences) — voir app.js, section « GRILLE D'ÉVALUATION FMPA ».
+function _gfBoite(doc, x, y, w, h, fill) {
+  doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.2);
+  if (fill) { doc.setFillColor(fill[0], fill[1], fill[2]); doc.rect(x, y, w, h, 'FD'); } else doc.rect(x, y, w, h, 'S');
+}
+function _gfTexte(doc, txt, x, y, w, h, o) {
+  o = Object.assign({ taille: 7, gras: false, align: 'center', valign: 'middle', couleur: [0, 0, 0], marge: 1.2 }, o || {});
+  doc.setFont('helvetica', o.gras ? 'bold' : 'normal');
+  doc.setFontSize(o.taille);
+  doc.setTextColor(o.couleur[0], o.couleur[1], o.couleur[2]);
+  const lh = o.taille * 0.3528 * 1.18;
+  const lignes = doc.splitTextToSize(String(txt || ''), w - 2 * o.marge);
+  const total = lignes.length * lh;
+  let ty = o.valign === 'middle' ? y + (h - total) / 2 + lh * 0.78 : y + o.marge + lh * 0.78;
+  lignes.forEach(l => {
+    const tx = o.align === 'center' ? x + w / 2 : x + o.marge;
+    doc.text(l, tx, ty, { align: o.align === 'center' ? 'center' : 'left' });
+    ty += lh;
+  });
+  doc.setTextColor(0, 0, 0);
+}
+function _gfRond(doc, cx, cy, coche) {
+  doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.25);
+  doc.circle(cx, cy, 1.6, 'S');
+  if (coche) { doc.setFillColor(0, 0, 0); doc.circle(cx, cy, 0.9, 'F'); }
+}
+function _gfCroix(doc, x, y, w, h) {
+  const cx = x + w / 2, cy = y + h / 2, r = Math.min(w, h) * 0.28;
+  doc.setDrawColor(0, 0, 0); doc.setLineWidth(0.7);
+  doc.line(cx - r, cy - r, cx + r, cy + r); doc.line(cx - r, cy + r, cx + r, cy - r);
+  doc.setLineWidth(0.2);
+}
+
+function _dessinerGrilleFMPA(doc, c) {
+  const { formation, comps, stagiaire, grille, lignes, sess } = c;
+  const X = 8, W = 281, cA = 28, cB = 52, cAuto = 46, cF = 21;
+  const xB = X + cA, xAuto = xB + cB, xF = xAuto + 3 * cAuto;
+  const logoW = 20;
+  let y = 8;
+
+  // Titre
+  _gfBoite(doc, X, y, W - logoW, 9, [0, 176, 240]);
+  doc.setTextColor(0, 0, 0);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(10);
+  const titre = 'ÉVALUATION ' + (formation.libelle || 'FMPA');
+  doc.text(titre, X + 2, y + 6);
+  const wt = doc.getTextWidth(titre);
+  doc.setFont('helvetica', 'italic'); doc.setFontSize(7);
+  doc.text('(à compléter impérativement si évaluation défavorable par formateur = inapte)', X + 2 + wt + 2, y + 6);
+  try { doc.addImage(LOGO_SDIS29, 'PNG', X + W - logoW + 1, y, 18, 17); } catch (e) { /* logo optionnel */ }
+  y += 9;
+  // Thème / descriptif
+  _gfBoite(doc, X, y, 120, 8); _gfBoite(doc, X + 120, y, W - logoW - 120, 8);
+  _gfTexte(doc, 'Thème de la séquence : ' + ((grille && grille.theme) || ''), X, y, 120, 8, { align: 'left', taille: 8 });
+  _gfTexte(doc, 'Descriptif succinct de la MSP / atelier pratique : ' + ((grille && grille.descriptif_msp) || ''), X + 120, y, W - logoW - 120, 8, { align: 'left', taille: 8 });
+  y += 8;
+
+  // En-têtes
+  const hH1 = 7, hH2 = 7;
+  _gfBoite(doc, X, y, cA, hH1 + hH2, [189, 215, 238]);
+  _gfTexte(doc, 'ACTIVITE / (BLOC DE COMPÉTENCES)', X, y, cA, hH1 + hH2, { gras: true, taille: 6.5 });
+  _gfBoite(doc, xB, y, cB, hH1 + hH2, [189, 215, 238]);
+  _gfTexte(doc, 'COMPETENCES ASSOCIÉES', xB, y, cB, hH1 + hH2, { gras: true, taille: 7 });
+  _gfBoite(doc, xAuto, y, 3 * cAuto, hH1, [255, 242, 204]);
+  _gfTexte(doc, "Autoévaluation de l'APPRENANT", xAuto, y, 3 * cAuto, hH1, { gras: true, taille: 8 });
+  _gfBoite(doc, xF, y, 3 * cF, hH1, [217, 225, 242]);
+  _gfTexte(doc, 'FORMATEUR', xF, y, 3 * cF, hH1, { gras: true, taille: 8 });
+  const ENT_AUTO = [['NON ACQUIS', [255, 0, 0]], ['ACQUIS', [146, 208, 80]], ['MAITRISE', [0, 176, 80]]];
+  ENT_AUTO.forEach(([t, col], i) => { _gfBoite(doc, xAuto + i * cAuto, y + hH1, cAuto, hH2, col); _gfTexte(doc, t, xAuto + i * cAuto, y + hH1, cAuto, hH2, { taille: 8 }); });
+  const ENT_FORM = [['Non évalué', [166, 166, 166]], ['Inapte', [255, 0, 0]], ['Apte', [146, 208, 80]]];
+  ENT_FORM.forEach(([t, col], i) => { _gfBoite(doc, xF + i * cF, y + hH1, cF, hH2, col); _gfTexte(doc, t, xF + i * cF, y + hH1, cF, hH2, { gras: true, taille: 6.5 }); });
+  y += hH1 + hH2;
+
+  // Corps : une ligne par compétence
+  const transvH = 12, axesH = 20, sigH = 22;
+  const dispo = 210 - 8 - y - (transvH + axesH + sigH);
+  const rh = Math.max(12, Math.min(18, dispo / Math.max(1, comps.length)));
+  const topH = 7;
+  const yCorps = y;
+  const TINTS_AUTO = [[255, 153, 153], [226, 240, 217], [198, 224, 180]];
+  const LIBS = ['non_acquis', 'acquis', 'maitrise'];
+  comps.forEach(cp => {
+    const l = lignes.find(x => x.competence_id === cp.id) || {};
+    const lib = _libellesAutoFMPA(cp);
+    _gfBoite(doc, xB, y, cB, rh, [221, 235, 247]);
+    _gfTexte(doc, cp.libelle, xB, y, cB, rh, { gras: true, taille: 6.8 });
+    LIBS.forEach((v, i) => {
+      const x = xAuto + i * cAuto;
+      _gfBoite(doc, x, y, cAuto, topH, TINTS_AUTO[i]);
+      _gfTexte(doc, lib[v], x, y, cAuto - 4, topH, { gras: true, taille: 5.3, align: 'left', marge: 1 });
+      _gfRond(doc, x + cAuto - 3.2, y + topH / 2, l.auto === v);
+    });
+    _gfBoite(doc, xAuto, y + topH, 3 * cAuto, rh - topH, null);
+    const puces = _pucesCompetence(cp).map(p => '- ' + p).join('\n');
+    _gfTexte(doc, puces, xAuto, y + topH, 3 * cAuto, rh - topH, { taille: 6 });
+    ['non_evalue', 'inapte', 'apte'].forEach((v, i) => {
+      const x = xF + i * cF;
+      _gfBoite(doc, x, y, cF, rh, v === 'inapte' ? [255, 205, 205] : v === 'apte' ? [226, 240, 217] : null);
+      if ((l.formateur || 'non_evalue') === v && l.formateur) _gfCroix(doc, x, y, cF, rh);
+    });
+    y += rh;
+  });
+  // Bloc « Activité » fusionné à gauche
+  _gfBoite(doc, X, yCorps, cA, y - yCorps, [221, 235, 247]);
+  const activite = "Agir en qualité d'équipier " + (formation.domaine_competence || '');
+  doc.setFont('times', 'bold'); doc.setFontSize(10); doc.setTextColor(0, 0, 0);
+  const lAct = doc.splitTextToSize(activite, cA - 4);
+  let ya = yCorps + (y - yCorps) / 2 - lAct.length * 2.6 - 4;
+  lAct.forEach(t => { doc.text(t, X + cA / 2, ya, { align: 'center' }); ya += 5; });
+  doc.setFont('times', 'bolditalic'); doc.setFontSize(8);
+  const lConf = doc.splitTextToSize('(conforme aux RNE « équipier » SPP-SPV)', cA - 4);
+  ya += 3; lConf.forEach(t => { doc.text(t, X + cA / 2, ya, { align: 'center' }); ya += 3.6; });
+
+  // Compétences transversales
+  const fondT = [252, 228, 214];
+  _gfBoite(doc, X, y, cA + cB, transvH, fondT);
+  _gfTexte(doc, "Compétences TRANSVERSALES :\n• S'impliquer dans son activité\n• Agir au sein d'un collectif\n• Maintenir capacité OPS", X, y, cA + cB, transvH, { gras: true, taille: 5.8, align: 'left' });
+  _gfBoite(doc, xAuto, y, 3 * cAuto, transvH, fondT);
+  const tr = grille && grille.transversal;
+  _gfTexte(doc, 'Attitude / Comportement INADAPTÉ', xAuto, y, 1.5 * cAuto, 6, { taille: 7, align: 'left' });
+  _gfRond(doc, xAuto + 1.5 * cAuto - 5, y + 3, tr === 'inadapte');
+  _gfTexte(doc, 'Attitude / Comportement ADAPTÉ', xAuto + 1.5 * cAuto, y, 1.5 * cAuto, 6, { taille: 7, align: 'left' });
+  _gfRond(doc, xAuto + 3 * cAuto - 5, y + 3, tr === 'adapte');
+  _gfBoite(doc, xAuto + 25, y + 6.2, 3 * cAuto - 50, 5, [255, 255, 255]);
+  _gfTexte(doc, 'Respect des valeurs & normes / honnêteté / Remise en question / bienveillance', xAuto + 25, y + 6.2, 3 * cAuto - 50, 5, { taille: 6.5 });
+  ['non_evalue', 'inapte', 'apte'].forEach((v, i) => {
+    const x = xF + i * cF;
+    _gfBoite(doc, x, y, cF, transvH, v === 'inapte' ? [255, 205, 205] : v === 'apte' ? [226, 240, 217] : null);
+    if ((v === 'inapte' && tr === 'inadapte') || (v === 'apte' && tr === 'adapte')) _gfCroix(doc, x, y, cF, transvH);
+  });
+  y += transvH;
+
+  // Axes de travail / points d'ancrage
+  const wAxes = 190;
+  _gfBoite(doc, X, y, wAxes, axesH); _gfBoite(doc, X + wAxes, y, W - wAxes, axesH);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.setTextColor(0, 0, 0);
+  doc.text("Axe(s) de Travail (à remplir systématiquement si", X + 2, y + 4.5);
+  const xi = X + 2 + doc.getTextWidth("Axe(s) de Travail (à remplir systématiquement si ") + 1;
+  doc.setFillColor(255, 0, 0); doc.rect(xi, y + 1.2, 9, 4.2, 'F');
+  doc.setTextColor(255, 255, 255); doc.setFontSize(5.5); doc.text('inapte', xi + 4.5, y + 4.2, { align: 'center' });
+  doc.setTextColor(0, 0, 0); doc.setFontSize(8); doc.text('):', xi + 10, y + 4.5);
+  _gfTexte(doc, (grille && grille.axes_travail) || '', X, y + 5.5, wAxes, axesH - 5.5, { taille: 7.5, align: 'left', valign: 'top' });
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+  doc.text("Point(s) d'ancrage:", X + wAxes + 2, y + 4.5);
+  _gfTexte(doc, (grille && grille.points_ancrage) || '', X + wAxes, y + 5.5, W - wAxes, axesH - 5.5, { taille: 7.5, align: 'left', valign: 'top' });
+  y += axesH;
+
+  // Signatures
+  const w1 = 75, w2 = 65, w3 = 75, w4 = W - w1 - w2 - w3;
+  _gfBoite(doc, X, y, w1, sigH); _gfBoite(doc, X + w1, y, w2, sigH); _gfBoite(doc, X + w1 + w2, y, w3, sigH); _gfBoite(doc, X + w1 + w2 + w3, y, w4, sigH);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(8);
+  doc.text('FORMATEUR(S) :', X + 2, y + 4.5);
+  doc.setFont('helvetica', 'normal');
+  _gfTexte(doc, 'NOM(S) / Prénom(s) : ' + ((grille && grille.formateurs_signataires) || ''), X, y + 6, w1, sigH - 6, { taille: 7.5, align: 'left', valign: 'top' });
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
+  doc.text('Signature(s) :', X + w1 + 2, y + 4.5);
+  doc.setFont('helvetica', 'bold'); doc.text('APPRENANT :', X + w1 + w2 + 2, y + 4.5);
+  doc.setFont('helvetica', 'normal');
+  doc.text('NOM : ' + (stagiaire.nom || ''), X + w1 + w2 + 2, y + 10);
+  doc.text('Prénom : ' + (stagiaire.prenom || ''), X + w1 + w2 + 2, y + 16);
+  doc.text('Signature :', X + w1 + w2 + w3 + 2, y + 4.5);
+  y += sigH;
+  doc.setFontSize(5.5); doc.setTextColor(120, 120, 120);
+  doc.text(`${formation.libelle || ''} — ${(sess && sess.lieu) || ''} — session ${(sess && sess.code_acces) || ''}`, X, y + 3);
+  doc.setTextColor(0, 0, 0);
+}
+
+// stagId null = tous les stagiaires de la session ; seqId null = session sans séquence
+async function genererGrillesFMPA(stagId, seqId) {
+  if (!window.jspdf) return toast('Bibliothèque PDF non chargée', false);
+  const comps = _competencesGrille();
+  if (!comps.length) return toast("Aucune compétence définie pour cette formation (Paramètres formations > Grille d'évaluation)", false);
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const stags = stagId ? S.data.stagiaires.filter(s => s.id === stagId) : S.data.stagiaires;
+  if (!stags.length) return toast('Aucun stagiaire', false);
+  const seq = (S.data.sequencesSession || []).find(q => q.id === seqId) || null;
+  stags.forEach((st, i) => {
+    if (i > 0) doc.addPage();
+    const g = _grilleFMPA(st.id, seq ? seq.id : null);
+    const lignes = g ? (S.data.lignesGrilleFMPA || []).filter(l => l.grille_id === g.id) : [];
+    const grille = g ? Object.assign({}, g) : { theme: seq ? seq.libelle : '' };
+    if (!grille.theme && seq) grille.theme = seq.libelle;
+    _dessinerGrilleFMPA(doc, { formation: S.formation, comps, stagiaire: st, grille, lignes, sess: S.session });
+  });
+  const nom = stagId ? (stags[0].nom + '_' + stags[0].prenom) : 'tous';
+  doc.save(`Grille_FMPA_${S.session.code_acces}_${nom}.pdf`.replace(/\s+/g, '_'));
+  toast(`${stags.length} grille(s) générée(s)`);
+}

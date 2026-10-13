@@ -98,10 +98,11 @@ const MODULES_SESSION = [
   ['evaluations', 'Évaluations'], ['msp', 'Suivi MSP'], ['validation', 'Validation'], ['comparatif', 'Comparatif'],
   ['bilanjour', 'Bilan journalier'], ['planning', 'Chronogramme'], ['avis', 'Mon avis de fin de stage'],
   ['entretiens', 'Entretiens individuels'], ['compterendu', 'Compte rendu de fin de stage'],
+  ['grille', 'Grille FMPA'], // formations continues uniquement (voir ouvrirSession)
 ];
-// Préréglage suggéré pour une nouvelle formation continue (FMPA) : l'essentiel (présence), sans le
-// dispositif de certification de la formation initiale. Ajustable ensuite au cas par cas.
-const MODULES_FMPA_DEFAUT = ['stagiaires', 'formateurs'];
+// Préréglage suggéré pour une nouvelle formation continue (FMPA) : l'essentiel (présence + grille
+// d'évaluation FMPA), sans le dispositif de certification de la formation initiale. Ajustable.
+const MODULES_FMPA_DEFAUT = ['stagiaires', 'formateurs', 'grille'];
 const STATUTS = ['SPV', 'SPP', 'PATS'];
 // Liste des CIS du Finistère — à ajuster librement ici si besoin
 const CIS_29 = ['AUDIERNE', 'BANNALEC', 'BREST', 'BRIEC', 'CAMARET-SUR-MER', 'CARHAIX', 'CHATEAULIN',
@@ -666,10 +667,11 @@ function importerAptitudes(input) {
 function telechargerModeleAptitude() {
   const ws = XLSX.utils.aoa_to_sheet([
     ['Matricule', 'Nom', 'Prénom', 'Grade', 'Statut', 'CIS', 'Email', 'Domaine', 'Rôle', 'Fin de validité', 'Mot de passe', 'GFor'],
-    ['V0912345', 'GUEGAN', 'Pauline', 'ADC', 'SPV', 'CIS BANNALEC', 'p.guegan@sdis29.fr', 'INCENDIE', 'RP', '31/12/2027', 'motdepasse1', 'non'],
-    ['V0912345', 'GUEGAN', 'Pauline', 'ADC', 'SPV', 'CIS BANNALEC', 'p.guegan@sdis29.fr', 'PPBE', 'RP', '31/12/2027', '', ''],
-    ['V0912345', 'GUEGAN', 'Pauline', 'ADC', 'SPV', 'CIS BANNALEC', 'p.guegan@sdis29.fr', 'SSUAP', 'Formateur', '30/06/2027', '', ''],
-    ['V0954321', 'SINIC', 'Chloé', 'CCH', 'SPP', 'CIS QUIMPERLE', 'c.sinic@sdis29.fr', 'SSUAP', 'Formateur', '30/06/2027', 'autremdp2', 'non'],
+    // EXEMPLE FICTIF — personnes, matricules et adresses inventés (dépôt public : jamais de données réelles).
+    ['V0000001', 'EXEMPLE', 'Alice', 'ADC', 'SPV', 'CIS EXEMPLE', 'alice.exemple@exemple.fr', 'INCENDIE', 'RP', '31/12/2027', 'MotDePasseExemple', 'non'],
+    ['V0000001', 'EXEMPLE', 'Alice', 'ADC', 'SPV', 'CIS EXEMPLE', 'alice.exemple@exemple.fr', 'PPBE', 'RP', '31/12/2027', '', ''],
+    ['V0000001', 'EXEMPLE', 'Alice', 'ADC', 'SPV', 'CIS EXEMPLE', 'alice.exemple@exemple.fr', 'SSUAP', 'Formateur', '30/06/2027', '', ''],
+    ['V0000002', 'MODELE', 'Bruno', 'CCH', 'SPP', 'CIS EXEMPLE 2', 'bruno.modele@exemple.fr', 'SSUAP', 'Formateur', '30/06/2027', 'MotDePasseExemple', 'non'],
   ]);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Aptitudes');
@@ -860,7 +862,21 @@ async function chargerDonneesSession(sessionId) {
     equipiers: equi.data, evaluations: evals.data, autoevaluations: autos.data,
     bilansJournaliers: bilans.data, blocsPlanning: planning.data, entretiens: entretiens.data,
     avisFinStage: avisFin.data,
+    grillesFMPA: [], lignesGrilleFMPA: [], sequencesSession: [],
   };
+
+  // Grille d'évaluation FMPA + séquences couvertes par la session : chargées à part et sans jamais
+  // faire échouer le chargement de la session (tables absentes tant que le patch SQL n'est pas passé).
+  try {
+    const [gr, gl, ss] = await Promise.all([
+      sb.from('grilles_fmpa').select('*').eq('session_id', sessionId),
+      sb.from('grille_fmpa_lignes').select('*, grilles_fmpa!inner(session_id)').eq('grilles_fmpa.session_id', sessionId),
+      sb.from('session_sequences_fmpa').select('sequences_fmpa(id, libelle, volume_horaire, ordre)').eq('session_id', sessionId),
+    ]);
+    S.data.grillesFMPA = gr.error ? [] : (gr.data || []);
+    S.data.lignesGrilleFMPA = gl.error ? [] : (gl.data || []);
+    S.data.sequencesSession = ss.error ? [] : (ss.data || []).map(r => r.sequences_fmpa).filter(Boolean).sort((a, b) => a.ordre - b.ordre);
+  } catch (e) { /* tables FMPA absentes : on continue sans */ }
 
   // Marque directement chaque formateur ISP (qualification role='isp') sur S.data.formateurs, pour
   // que le chronogramme (planning.js/pdf.js) puisse déterminer le(s) jour(s) de présence ISP sans
@@ -944,6 +960,11 @@ async function ouvrirSession(sessionId) {
         ['evaluations', 'Évaluations'], ['msp', 'Suivi MSP'], ['validation', 'Validation'], ['comparatif', 'Comparatif'],
         ['bilanjour', 'Bilan journalier'], ['planning', 'Chronogramme'], ['avis', 'Mon avis de fin de stage'],
       ];
+  // Grille d'évaluation FMPA : uniquement pour les formations continues (autoévaluation du stagiaire
+  // + verdict apte/inapte du formateur, par séquence).
+  if (S.vision !== 'chef_centre' && S.formation && S.formation.type_formation === 'continue') {
+    onglets.splice(2, 0, ['grille', 'Grille FMPA']);
+  }
   // Réglages du stage, entretiens individuels, PV de stage et compte rendu de fin de stage :
   // réservés au RP et au GFor
   if (S.vision === 'rp' || S.vision === 'gfor') {
@@ -967,7 +988,7 @@ async function ouvrirSession(sessionId) {
   // Onglet par défaut à l'ouverture : le préféré selon la vision s'il est bien présent dans la
   // barre (peut avoir été désactivé pour cette formation), sinon le premier onglet disponible.
   const idsPresents = new Set(onglets.map(([id]) => id));
-  const prefere = S.vision === 'chef_centre' ? 'msp' : S.vision === 'formateur' ? 'evaluations' : 'stagiaires';
+  const prefere = S.vision === 'chef_centre' ? 'msp' : idsPresents.has('grille') ? 'grille' : S.vision === 'formateur' ? 'evaluations' : 'stagiaires';
   ongletSession(idsPresents.has(prefere) ? prefere : (onglets[0] ? onglets[0][0] : 'parametres'));
 }
 
@@ -980,7 +1001,8 @@ function ongletSession(id) {
   ({ stagiaires: ongletStagiaires, formateurs: ongletFormateurs, garde: ongletGarde,
      evaluations: ongletEvaluations, msp: ongletSuiviMSP, validation: ongletValidation, comparatif: ongletComparatif,
      bilanjour: ongletBilanJournalier, planning: ongletPlanning, entretiens: ongletEntretiens,
-     avis: ongletAvisFinStage, compterendu: ongletCompteRenduFinStage, parametres: ongletParametresStage }[id])();
+     avis: ongletAvisFinStage, compterendu: ongletCompteRenduFinStage, parametres: ongletParametresStage,
+     grille: ongletGrilleFMPA }[id])();
 }
 
 // ---------- Onglet Stagiaires ----------
@@ -3134,6 +3156,302 @@ async function enregistrerRemarqueFormateurBilan(stagiaireId, jour) {
 }
 
 // ============================================================
+// GRILLE D'ÉVALUATION FMPA (modèle papier « ÉVALUATION FMPA EQ SSUAP »)
+// 1 grille = 1 stagiaire × 1 séquence. Lignes = compétences de la formation FMPA (configurables
+// dans Paramètres formations > Grille d'évaluation). Le stagiaire remplit son autoévaluation
+// (non acquis / acquis / maîtrisé) ; le formateur donne son verdict (non évalué / inapte / apte)
+// par compétence, l'attitude transversale, les axes de travail (obligatoires si inapte) et les
+// points d'ancrage. Livrable : PDF paysage fidèle au modèle papier (voir pdf.js, genererGrillesFMPA).
+// ============================================================
+const NIVEAUX_AUTO_FMPA = [
+  ['non_acquis', 'NON ACQUIS', '#ff0000', '#ffd6d6'],
+  ['acquis', 'ACQUIS', '#92d050', '#e8f4dc'],
+  ['maitrise', 'MAÎTRISÉ', '#00b050', '#cdebd8'],
+];
+const VERDICTS_FMPA = [['non_evalue', 'Non évalué', '#a6a6a6'], ['inapte', 'Inapte', '#ff0000'], ['apte', 'Apte', '#92d050']];
+
+function _competencesGrille() {
+  return [...((S.formation && S.formation.competences) || [])].sort((a, b) => a.ordre - b.ordre);
+}
+function _libellesAutoFMPA(c) {
+  return {
+    non_acquis: c.lib_non_acquis || 'Je ne parviens pas à :',
+    acquis: c.lib_acquis || "J'arrive correctement à :",
+    maitrise: c.lib_maitrise || "J'arrive avec anticipation / optimisation à :",
+  };
+}
+function _pucesCompetence(c) {
+  return (c.detail || '').split('\n').map(x => x.trim()).filter(Boolean);
+}
+function _grilleFMPA(stagId, seqId) {
+  return (S.data.grillesFMPA || []).find(g => g.stagiaire_id === stagId && (g.sequence_fmpa_id || null) === (seqId || null));
+}
+function _ligneGrilleFMPA(g, compId) {
+  return g ? (S.data.lignesGrilleFMPA || []).find(l => l.grille_id === g.id && l.competence_id === compId) : null;
+}
+function _radioValeur(nom) {
+  const r = document.querySelector(`input[name="${nom}"]:checked`);
+  return r ? r.value : null;
+}
+
+// ---------- Onglet « Grille FMPA » (formateur / RP / GFor) ----------
+let _gf = { stagId: null, seqId: null };
+
+function ongletGrilleFMPA() {
+  const stags = S.data.stagiaires || [];
+  const seqs = S.data.sequencesSession || [];
+  if (!stags.length) {
+    $('session-contenu').innerHTML = `<div class="carte"><h2>Grille d'évaluation FMPA</h2><p class="info">Aucun stagiaire inscrit à cette session pour le moment (onglet Stagiaires).</p></div>`;
+    return;
+  }
+  if (!stags.some(s => s.id === _gf.stagId)) _gf.stagId = stags[0].id;
+  if (seqs.length) { if (!seqs.some(q => q.id === _gf.seqId)) _gf.seqId = seqs[0].id; } else _gf.seqId = null;
+
+  $('session-contenu').innerHTML = `
+    <div class="carte">
+      <h2>Grille d'évaluation FMPA</h2>
+      <div class="info">Une grille par stagiaire et par séquence. L'autoévaluation est normalement remplie par le stagiaire depuis son accès (tu peux aussi la saisir ici à sa place). Si une compétence est jugée « inapte » ou l'attitude « inadaptée », les axes de travail sont obligatoires.</div>
+      <div class="ligne">
+        <div><label>Stagiaire</label><select onchange="_gf.stagId = Number(this.value); _rendreGrilleStaff()">
+          ${stags.map(s => `<option value="${s.id}" ${s.id === _gf.stagId ? 'selected' : ''}>${esc(s.nom)} ${esc(s.prenom)}${_grilleFMPA(s.id, seqs.length ? _gf.seqId : null) ? ' ✓' : ''}</option>`).join('')}
+        </select></div>
+        ${seqs.length ? `<div><label>Séquence</label><select onchange="_gf.seqId = Number(this.value); ongletGrilleFMPA()">
+          ${seqs.map(q => `<option value="${q.id}" ${q.id === _gf.seqId ? 'selected' : ''}>${esc(q.libelle)} (${esc(q.volume_horaire)} h)</option>`).join('')}
+        </select></div>` : ''}
+      </div>
+      <div id="gf-zone"></div>
+    </div>`;
+  _rendreGrilleStaff();
+}
+
+function _rendreGrilleStaff() {
+  const s = S.data.stagiaires.find(x => x.id === _gf.stagId);
+  const seq = (S.data.sequencesSession || []).find(q => q.id === _gf.seqId) || null;
+  const g = _grilleFMPA(s.id, seq ? seq.id : null);
+  const comps = _competencesGrille();
+  if (!comps.length) {
+    $('gf-zone').innerHTML = `<p class="info" style="margin-top:12px">Aucune compétence définie pour cette formation. Le GFor les renseigne dans Paramètres formations → 📋 Grille d'évaluation.</p>`;
+    return;
+  }
+  const lignes = comps.map(c => {
+    const l = _ligneGrilleFMPA(g, c.id);
+    const lib = _libellesAutoFMPA(c);
+    const puces = _pucesCompetence(c);
+    const verdict = (l && l.formateur) || 'non_evalue';
+    return `<tr>
+      <td rowspan="2" style="background:#dbe8f5;font-weight:600;min-width:150px">${esc(c.libelle)}</td>
+      ${NIVEAUX_AUTO_FMPA.map(([v, , , tint]) => `<td style="background:${tint}"><label style="margin:0;font-weight:400"><input type="radio" name="gf-auto-${c.id}" value="${v}" ${l && l.auto === v ? 'checked' : ''} style="width:auto"> ${esc(lib[v])}</label></td>`).join('')}
+      <td rowspan="2" style="white-space:nowrap">
+        ${VERDICTS_FMPA.map(([v, lbl, col]) => `<label style="display:block;margin:2px 0;font-weight:600;color:${v === 'non_evalue' ? '#666' : v === 'inapte' ? '#b00020' : '#2e7d32'}"><input type="radio" name="gf-form-${c.id}" value="${v}" ${verdict === v ? 'checked' : ''} style="width:auto"> ${lbl}</label>`).join('')}
+      </td>
+    </tr>
+    <tr><td colspan="3" style="font-size:12px;background:#fafafa">${puces.map(p => '• ' + esc(p)).join('<br>') || '<span class="info">—</span>'}</td></tr>`;
+  }).join('');
+
+  const transv = g && g.transversal;
+  const nomsDefaut = (g && g.formateurs_signataires) || (S.user && S.user.nom) || '';
+  $('gf-zone').innerHTML = `
+    <div class="ligne" style="margin-top:12px">
+      <div><label>Thème de la séquence</label><input id="gf-theme" value="${esc((g && g.theme) || (seq ? seq.libelle : ''))}"></div>
+      <div><label>Descriptif succinct de la MSP / atelier pratique</label><input id="gf-descriptif" value="${esc((g && g.descriptif_msp) || '')}"></div>
+    </div>
+    <div class="table-scroll" style="margin-top:10px"><table>
+      <tr><th rowspan="2">Compétences associées</th>
+        <th colspan="3" style="text-align:center">Autoévaluation de l'apprenant</th><th>Formateur</th></tr>
+      <tr>${NIVEAUX_AUTO_FMPA.map(([, lbl, col]) => `<th style="background:${col};color:#000;text-align:center">${lbl}</th>`).join('')}<th style="background:#a6a6a6">Verdict</th></tr>
+      ${lignes}
+      <tr style="background:#fde9d9">
+        <td><b>Compétences TRANSVERSALES</b><div class="info">S'impliquer dans son activité · Agir au sein d'un collectif · Maintenir capacité OPS</div></td>
+        <td colspan="3"><div class="info" style="margin:0 0 4px">Respect des valeurs &amp; normes / honnêteté / remise en question / bienveillance</div>
+          <label style="display:inline-block;margin-right:18px;color:#b00020;font-weight:600"><input type="radio" name="gf-transv" value="inadapte" ${transv === 'inadapte' ? 'checked' : ''} style="width:auto"> Attitude / comportement INADAPTÉ</label>
+          <label style="display:inline-block;color:#2e7d32;font-weight:600"><input type="radio" name="gf-transv" value="adapte" ${transv === 'adapte' ? 'checked' : ''} style="width:auto"> Attitude / comportement ADAPTÉ</label></td>
+        <td></td>
+      </tr>
+    </table></div>
+    <div class="ligne">
+      <div style="flex:2"><label>Axe(s) de travail <span style="color:#b00020">(obligatoire(s) si inapte)</span></label><textarea id="gf-axes">${esc((g && g.axes_travail) || '')}</textarea></div>
+      <div><label>Point(s) d'ancrage</label><textarea id="gf-ancrage">${esc((g && g.points_ancrage) || '')}</textarea></div>
+    </div>
+    <label>Formateur(s) signataire(s) (noms et prénoms)</label>
+    <input id="gf-formateurs" value="${esc(nomsDefaut)}">
+    <div class="ligne" style="margin-top:6px">
+      <button class="btn" onclick="enregistrerGrilleFMPA()">💾 Enregistrer la grille</button>
+      <button class="btn secondaire" onclick="genererGrillesFMPA(${s.id}, ${seq ? seq.id : 'null'})">📄 PDF de ce stagiaire</button>
+      <button class="btn secondaire" onclick="genererGrillesFMPA(null, ${seq ? seq.id : 'null'})">📄 PDF de tous les stagiaires${seq ? ' (cette séquence)' : ''}</button>
+    </div>`;
+}
+
+async function enregistrerGrilleFMPA() {
+  const stagId = _gf.stagId, seqId = _gf.seqId || null;
+  const comps = _competencesGrille();
+  const verdicts = comps.map(c => _radioValeur('gf-form-' + c.id) || 'non_evalue');
+  const transversal = _radioValeur('gf-transv');
+  const inapte = verdicts.includes('inapte') || transversal === 'inadapte';
+  const axes = $('gf-axes').value.trim();
+  if (inapte && !axes) return toast("Évaluation défavorable (inapte) : les axes de travail sont obligatoires", false);
+
+  const payload = {
+    session_id: S.session.id, stagiaire_id: stagId, sequence_fmpa_id: seqId,
+    theme: $('gf-theme').value.trim() || null,
+    descriptif_msp: $('gf-descriptif').value.trim() || null,
+    transversal: transversal || null,
+    axes_travail: axes || null,
+    points_ancrage: $('gf-ancrage').value.trim() || null,
+    formateurs_signataires: $('gf-formateurs').value.trim() || null,
+    updated_at: new Date().toISOString(),
+  };
+  let g = _grilleFMPA(stagId, seqId);
+  if (g) {
+    const { error } = await sb.from('grilles_fmpa').update(payload).eq('id', g.id);
+    if (error) return toast(error.message, false);
+  } else {
+    const { data, error } = await sb.from('grilles_fmpa').insert(payload).select().single();
+    if (error) return toast(error.message, false);
+    g = data;
+  }
+  const rows = comps.map((c, i) => ({
+    grille_id: g.id, competence_id: c.id, auto: _radioValeur('gf-auto-' + c.id), formateur: verdicts[i],
+  }));
+  const { error: e2 } = await sb.from('grille_fmpa_lignes').upsert(rows, { onConflict: 'grille_id,competence_id' });
+  if (e2) return toast(e2.message, false);
+  await chargerDonneesSession(S.session.id);
+  toast('Grille enregistrée');
+  ongletGrilleFMPA();
+}
+
+// ---------- Vue stagiaire : autoévaluation FMPA (une carte par séquence) ----------
+function blocGrilleFMPAStagiaire() {
+  const comps = _competencesGrille();
+  if (!comps.length) return '';
+  const seqs = S.data.sequencesSession || [];
+  const cibles = seqs.length ? seqs : [null];
+  return cibles.map(seq => {
+    const sid = seq ? seq.id : null;
+    const g = _grilleFMPA(S.stagiaire.id, sid);
+    const lignes = comps.map(c => {
+      const l = _ligneGrilleFMPA(g, c.id);
+      const lib = _libellesAutoFMPA(c);
+      const puces = _pucesCompetence(c);
+      const verdict = l && l.formateur && l.formateur !== 'non_evalue' ? l.formateur : null;
+      return `<div class="bloc-comp">
+        <div class="libelle"><b>${esc(c.libelle)}</b>
+          ${verdict ? ` <span class="niv ${verdict === 'apte' ? 'niv-A' : 'niv-NA'}">Avis formateur : ${verdict === 'apte' ? 'apte' : 'inapte'}</span>` : ''}</div>
+        ${puces.length ? `<div class="info">${puces.map(p => '• ' + esc(p)).join('<br>')}</div>` : ''}
+        <div style="margin-top:6px">
+          ${NIVEAUX_AUTO_FMPA.map(([v, lbl, , tint]) => `<label style="display:block;background:${tint};border-radius:6px;padding:6px 8px;margin:3px 0;font-weight:400">
+            <input type="radio" name="ga-${sid || 0}-${c.id}" value="${v}" ${l && l.auto === v ? 'checked' : ''} style="width:auto">
+            <b>${lbl}</b> — ${esc(lib[v])}</label>`).join('')}
+        </div>
+      </div>`;
+    }).join('');
+    const axes = g && g.axes_travail, ancrage = g && g.points_ancrage;
+    return `<div class="carte">
+      <h2>Mon autoévaluation FMPA${seq ? ' — ' + esc(seq.libelle) : ''}</h2>
+      <div class="info">Pour chaque compétence, indique où tu te situes honnêtement. Le formateur donnera ensuite son avis sur la même grille.</div>
+      ${lignes}
+      <button class="btn" onclick="enregistrerAutoGrilleFMPA(${sid || 'null'})">Enregistrer mon autoévaluation</button>
+      ${axes ? `<p class="info" style="margin-top:10px"><b>Axes de travail (formateur) :</b> ${esc(axes)}</p>` : ''}
+      ${ancrage ? `<p class="info"><b>Points d'ancrage (formateur) :</b> ${esc(ancrage)}</p>` : ''}
+    </div>`;
+  }).join('');
+}
+
+async function enregistrerAutoGrilleFMPA(seqId) {
+  const comps = _competencesGrille();
+  let g = _grilleFMPA(S.stagiaire.id, seqId);
+  if (!g) {
+    const { data, error } = await sb.from('grilles_fmpa')
+      .insert({ session_id: S.session.id, stagiaire_id: S.stagiaire.id, sequence_fmpa_id: seqId }).select().single();
+    if (error) return toast(error.message, false);
+    g = data;
+  }
+  for (const c of comps) {
+    const val = _radioValeur(`ga-${seqId || 0}-${c.id}`);
+    if (!val) continue;
+    const l = _ligneGrilleFMPA(g, c.id);
+    const res = l
+      ? await sb.from('grille_fmpa_lignes').update({ auto: val }).eq('id', l.id)
+      : await sb.from('grille_fmpa_lignes').insert({ grille_id: g.id, competence_id: c.id, auto: val });
+    if (res.error) return toast(res.error.message, false);
+  }
+  toast('Autoévaluation enregistrée');
+  ecranAccueilStagiaire();
+}
+
+// ---------- Paramétrage de la grille d'une formation FMPA (GFor) ----------
+async function ecranGrilleFormation(formationId) {
+  const f = (window._formations || []).find(x => x.id === formationId);
+  const { data: comp, error } = await sb.from('competences').select('*').eq('formation_id', formationId).order('ordre');
+  if (error) return toast(error.message, false);
+  const lignes = (comp || []).map(c => `<tr>
+      <td><input value="${esc(c.ordre)}" type="number" style="width:56px" id="gc-ordre-${c.id}"></td>
+      <td><input value="${esc(c.libelle)}" id="gc-lib-${c.id}">
+        <details style="margin-top:4px"><summary class="info">Formulations des 3 colonnes (facultatif)</summary>
+          <input placeholder="Non acquis (défaut : Je ne parviens pas à :)" value="${esc(c.lib_non_acquis || '')}" id="gc-lna-${c.id}" style="margin-top:4px">
+          <input placeholder="Acquis (défaut : J'arrive correctement à :)" value="${esc(c.lib_acquis || '')}" id="gc-lac-${c.id}" style="margin-top:4px">
+          <input placeholder="Maîtrisé (défaut : J'arrive avec anticipation / optimisation à :)" value="${esc(c.lib_maitrise || '')}" id="gc-lma-${c.id}" style="margin-top:4px">
+        </details></td>
+      <td><textarea id="gc-detail-${c.id}" style="min-height:70px">${esc(c.detail || '')}</textarea></td>
+      <td style="white-space:nowrap">
+        <button class="btn petit secondaire" onclick="enregistrerCompetenceGrille(${c.id}, ${formationId})">💾</button>
+        <button class="btn petit secondaire" onclick="supprCompetenceGrille(${c.id}, ${formationId})">✕</button>
+      </td>
+    </tr>`).join('');
+
+  $('staff-dashboard').innerHTML = `<div class="carte">
+    <span class="lien-retour" onclick="ecranParametresFormations()">← Retour aux paramètres formations</span>
+    <h2>Grille d'évaluation — ${esc(f ? f.libelle : '')}</h2>
+    <div class="info">Chaque ligne est une compétence de la grille FMPA (autoévaluation du stagiaire + verdict formateur). Dans « Détail », une ligne = une puce affichée sous la compétence. Les compétences transversales et les axes de travail sont déjà prévus dans la grille.</div>
+    <div class="table-scroll"><table>
+      <tr><th>Ordre</th><th>Compétence</th><th>Détail (une puce par ligne)</th><th></th></tr>
+      ${lignes || '<tr><td colspan="4" class="info">Aucune compétence pour cette formation.</td></tr>'}
+    </table></div>
+    <h3>Ajouter une compétence</h3>
+    <div class="ligne">
+      <div><label>Ordre</label><input id="gc-new-ordre" type="number" value="${(comp || []).length + 1}"></div>
+      <div style="flex:3"><label>Compétence</label><input id="gc-new-lib"></div>
+    </div>
+    <label>Détail (une puce par ligne)</label>
+    <textarea id="gc-new-detail"></textarea>
+    <button class="btn" onclick="ajouterCompetenceGrille(${formationId})">➕ Ajouter</button>
+  </div>`;
+}
+
+async function enregistrerCompetenceGrille(id, formationId) {
+  const { error } = await sb.from('competences').update({
+    ordre: Number($('gc-ordre-' + id).value) || 1,
+    libelle: $('gc-lib-' + id).value.trim(),
+    detail: $('gc-detail-' + id).value.trim() || null,
+    lib_non_acquis: $('gc-lna-' + id).value.trim() || null,
+    lib_acquis: $('gc-lac-' + id).value.trim() || null,
+    lib_maitrise: $('gc-lma-' + id).value.trim() || null,
+  }).eq('id', id);
+  if (error) return toast(error.message, false);
+  toast('Compétence mise à jour');
+}
+
+async function ajouterCompetenceGrille(formationId) {
+  const libelle = $('gc-new-lib').value.trim();
+  if (!libelle) return toast('Libellé requis', false);
+  const ordre = Number($('gc-new-ordre').value) || 1;
+  const { error } = await sb.from('competences').insert({
+    formation_id: formationId, code: 'F' + ordre, libelle, ordre, grisee: false,
+    detail: $('gc-new-detail').value.trim() || null,
+  });
+  if (error) return toast(error.message, false);
+  toast('Compétence ajoutée');
+  ecranGrilleFormation(formationId);
+}
+
+async function supprCompetenceGrille(id, formationId) {
+  if (!confirm('Supprimer cette compétence de la grille ? Les évaluations déjà saisies sur cette ligne seront supprimées.')) return;
+  const { error } = await sb.from('competences').delete().eq('id', id);
+  if (error) return toast(error.message, false);
+  toast('Compétence supprimée');
+  ecranGrilleFormation(formationId);
+}
+
+// ============================================================
 // CÔTÉ STAGIAIRE
 // ============================================================
 // Note : ongletPlanning, formBlocPlanning, enregistrerBlocPlanning, supprimerBlocPlanning,
@@ -3144,6 +3462,17 @@ async function enregistrerRemarqueFormateurBilan(stagiaireId, jour) {
 async function ecranAccueilStagiaire() {
   await chargerDonneesSession(S.session.id);
   const stagiaireId = S.stagiaire.id;
+  // Formation continue (FMPA) : pas de passages MSP ni de comparatif — le stagiaire voit son
+  // programme, remplit son autoévaluation sur la grille FMPA (par séquence), et peut déposer un avis.
+  if (S.formation.type_formation === 'continue') {
+    const mods = Array.isArray(S.formation.modules_actifs) ? S.formation.modules_actifs : [];
+    const html = (mods.includes('planning') ? blocStagiaireChronogramme() : '')
+      + (mods.includes('grille') ? blocGrilleFMPAStagiaire() : '')
+      + (mods.includes('avis') ? _blocAvisFinStage(stagiaireId, null) : '');
+    $('stagiaire-contenu').innerHTML = html || `<div class="carte"><p class="info">Rien à remplir pour cette formation. Merci d'être venu !</p></div>`;
+    show('ecran-stagiaire');
+    return;
+  }
   const mesPassages = S.data.equipiers
     .filter(e => e.stagiaire_id === stagiaireId)
     .map(e => S.data.passages.find(p => p.id === e.passage_id))
@@ -3403,7 +3732,8 @@ async function ecranParametresFormations() {
       <td style="white-space:nowrap">
         <button class="btn petit secondaire" onclick="ecranFormulaireFormation(${f.id})">✏️</button>
         ${estFMPA
-          ? `<button class="btn petit secondaire" onclick="ecranSequencesFormation(${f.id})">🗓️ Séquences FMPA</button>`
+          ? `<button class="btn petit secondaire" onclick="ecranSequencesFormation(${f.id})">🗓️ Séquences FMPA</button>
+             <button class="btn petit secondaire" onclick="ecranGrilleFormation(${f.id})">📋 Grille d'évaluation</button>`
           : `<button class="btn petit secondaire" onclick="ecranCompetencesFormation(${f.id})">📋 Compétences</button>
              <button class="btn petit secondaire" onclick="ecranBlocsPlanningModeles(${f.id})">🗓️ Planning imposé</button>`}
       </td>
